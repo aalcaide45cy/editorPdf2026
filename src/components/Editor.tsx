@@ -272,7 +272,13 @@ export default function Editor() {
             
             const [x, y] = viewport.convertToViewportPoint(tx, ty);
             
-            const fontSize = Math.abs(matrix[3]) || 12;
+            let fontSize = Math.round(item.height || Math.abs(matrix[3]) || 12);
+            if (fontSize < 4) {
+              fontSize = Math.round(Math.abs(matrix[3])) || 12;
+            }
+            if (fontSize < 4) {
+              fontSize = 12;
+            }
             
             const itemWidth = item.width * viewport.scale;
             const itemHeight = fontSize * viewport.scale;
@@ -281,8 +287,26 @@ export default function Editor() {
             const fontStyleObj = textContent.styles[item.fontName];
             const fontName = ((fontStyleObj ? fontStyleObj.fontFamily : '') || item.fontName || '').toLowerCase();
             
-            const isBold = fontName.includes('bold') || fontName.includes('black') || fontName.includes('heavy') || fontName.includes('w700') || fontName.includes('w800') || fontName.includes('w900') || fontName.includes('w600');
-            const isItalic = fontName.includes('italic') || fontName.includes('oblique') || fontName.includes('obli');
+            const isBold = fontName.includes('bold') || 
+                           fontName.includes('black') || 
+                           fontName.includes('heavy') || 
+                           fontName.includes('w700') || 
+                           fontName.includes('w850') || 
+                           fontName.includes('w800') || 
+                           fontName.includes('w900') || 
+                           fontName.includes('w600') || 
+                           fontName.includes('semibold') ||
+                           fontName.includes('medium') ||
+                           fontName.includes('-bd') ||
+                           fontName.endsWith('bd') ||
+                           fontName.includes('demi');
+
+            const isItalic = fontName.includes('italic') || 
+                             fontName.includes('oblique') || 
+                             fontName.includes('obli') || 
+                             fontName.includes('-it') ||
+                             fontName.endsWith('it') ||
+                             fontName.includes('slant');
             
             // CORRECCIÓN: "sans-serif".includes("serif") es true, debemos descartarlo usando !includes('sans')
             const isSerif = (fontName.includes('serif') && !fontName.includes('sans')) || fontName.includes('times') || fontName.includes('roman') || fontName.includes('georgia') || fontName.includes('cambria') || fontName.includes('garamond');
@@ -466,10 +490,12 @@ export default function Editor() {
     });
     pushToHistory({ ...elements, [currentPage]: updated });
     setEditingTextElementId(null);
+    setSelectedElementId(null);
   };
 
   const handleCancelTextEdit = () => {
     setEditingTextElementId(null);
+    setSelectedElementId(null);
   };
 
   // Añadir elementos de edición
@@ -1210,9 +1236,12 @@ export default function Editor() {
                   onChange={(e) => updateSelectedFontSize(Number(e.target.value))}
                   className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
                 >
-                  {[6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 40, 48, 56, 72].map((s) => (
-                    <option key={s} value={s}>{s}px</option>
-                  ))}
+                  {Array.from(new Set([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 40, 48, 56, 72, Math.round(selectedElement.fontSize)]))
+                    .sort((a, b) => a - b)
+                    .map((s) => (
+                      <option key={s} value={s}>{s}px</option>
+                    ))
+                  }
                 </select>
 
                 <button
@@ -1572,9 +1601,12 @@ export default function Editor() {
                                       onChange={(e) => updateSelectedFontSize(Number(e.target.value))}
                                       className="bg-slate-50 dark:bg-slate-950 text-xs px-2 py-1 rounded border border-slate-200 dark:border-slate-800 outline-none text-slate-800 dark:text-slate-200"
                                     >
-                                      {[6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 40, 48, 56, 72].map((s) => (
-                                        <option key={s} value={s}>{s}px</option>
-                                      ))}
+                                      {Array.from(new Set([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 40, 48, 56, 72, Math.round(el.fontSize)]))
+                                        .sort((a, b) => a - b)
+                                        .map((s) => (
+                                          <option key={s} value={s}>{s}px</option>
+                                        ))
+                                      }
                                     </select>
 
                                     <button
