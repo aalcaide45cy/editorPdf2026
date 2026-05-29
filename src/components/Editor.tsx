@@ -39,6 +39,7 @@ interface TextElement {
   fontWeight?: 'bold' | 'normal';
   fontStyle?: 'italic' | 'normal';
   fontFamily?: 'sans-serif' | 'serif';
+  originalTextId?: string;
 }
 
 interface ImageElement {
@@ -189,6 +190,11 @@ export default function Editor() {
   const [originalTextItems, setOriginalTextItems] = useState<OriginalTextItem[]>([]);
   const [hiddenOriginalTextIds, setHiddenOriginalTextIds] = useState<Set<string>>(new Set());
 
+  // Inline text editing states
+  const [editingTextElementId, setEditingTextElementId] = useState<string | null>(null);
+  const [tempText, setTempText] = useState('');
+  const wasElementClickRef = useRef(false);
+
   // Interactive tools states
   const [showSignaturePad, setShowSignaturePad] = useState(false);
   
@@ -218,6 +224,7 @@ export default function Editor() {
     setElements(previousElements);
     setHistory((prev) => prev.slice(0, -1));
     setSelectedElementId(null);
+    setEditingTextElementId(null);
   };
 
   // Evitar salida accidental
@@ -366,6 +373,7 @@ export default function Editor() {
         setDeletedPages(new Set());
         setElements({});
         setSelectedElementId(null);
+        setEditingTextElementId(null);
         setIsEditTextMode(false);
         setHistory([]);
         setLoadingMsg('');
@@ -388,6 +396,7 @@ export default function Editor() {
     setDeletedPages(new Set());
     setElements({});
     setSelectedElementId(null);
+    setEditingTextElementId(null);
     setIsEditTextMode(false);
     setHistory([]);
     setLoadingMsg('');
@@ -440,12 +449,36 @@ export default function Editor() {
     setDeletedPages(newDeleted);
   };
 
+  // Handlers para edición inline de texto
+  const handleStartTextEdit = (element: TextElement) => {
+    setEditingTextElementId(element.id);
+    setTempText(element.text);
+    setSelectedElementId(element.id);
+  };
+
+  const handleConfirmTextEdit = (id: string) => {
+    const pageElements = elements[currentPage] || [];
+    const updated = pageElements.map((el) => {
+      if (el.id === id && el.type === 'text') {
+        return { ...el, text: tempText } as TextElement;
+      }
+      return el;
+    });
+    pushToHistory({ ...elements, [currentPage]: updated });
+    setEditingTextElementId(null);
+  };
+
+  const handleCancelTextEdit = () => {
+    setEditingTextElementId(null);
+  };
+
   // Añadir elementos de edición
   const addTextElement = () => {
+    const newTextId = `text-${Date.now()}`;
     const newText: TextElement = {
-      id: `text-${Date.now()}`,
+      id: newTextId,
       type: 'text',
-      text: 'Haz doble clic para editar',
+      text: 'Nuevo Texto',
       x: 0.1,
       y: 0.1,
       fontSize: 16,
@@ -459,7 +492,8 @@ export default function Editor() {
       ...elements,
       [currentPage]: [...pageElements, newText],
     });
-    setSelectedElementId(newText.id);
+    setSelectedElementId(newTextId);
+    handleStartTextEdit(newText); // Abrir edición inline automáticamente
   };
 
   const addSignatureElement = (dataUrl: string) => {
@@ -548,7 +582,8 @@ export default function Editor() {
     }
 
     // 1. Añadir el parche ocultador del color de fondo exacto
-    const whiteoutId = `whiteout-${Date.now()}`;
+    const timestamp = Date.now();
+    const whiteoutId = `whiteout-orig-${timestamp}`;
     const whiteoutShape: ShapeElement = {
       id: whiteoutId,
       type: 'shape',
@@ -564,7 +599,7 @@ export default function Editor() {
     };
 
     // 2. Añadir el texto editable con sus estilos y color detectados
-    const textId = `text-edit-${Date.now()}`;
+    const textId = `text-edit-${timestamp}`;
     const editableText: TextElement = {
       id: textId,
       type: 'text',
@@ -576,6 +611,7 @@ export default function Editor() {
       fontWeight: item.fontWeight,
       fontStyle: item.fontStyle,
       fontFamily: item.fontFamily,
+      originalTextId: item.id,
     };
 
     const pageElements = elements[currentPage] || [];
@@ -589,12 +625,14 @@ export default function Editor() {
     setHiddenOriginalTextIds(newHidden);
 
     setSelectedElementId(textId);
+    handleStartTextEdit(editableText); // Abrir edición inline automáticamente
   };
 
   // --- LÓGICA DE ARRASTRE Y REDIMENSIÓN DE ALTO RENDIMIENTO (SIN LAG) ---
   const handleElementPointerDown = (e: React.PointerEvent<HTMLDivElement>, element: EditorElement) => {
     e.stopPropagation();
     setSelectedElementId(element.id);
+    wasElementClickRef.current = true;
     
     const container = containerRef.current;
     if (!container) return;
@@ -621,6 +659,7 @@ export default function Editor() {
   const startResize = (e: React.PointerEvent, element: ImageElement | ShapeElement) => {
     e.stopPropagation();
     setSelectedElementId(element.id);
+    wasElementClickRef.current = true;
     isResizingRef.current = true;
     
     const container = containerRef.current;
@@ -822,9 +861,25 @@ export default function Editor() {
   const deleteSelectedElement = () => {
     if (!selectedElementId) return;
     const pageElements = elements[currentPage] || [];
-    const updated = pageElements.filter((el) => el.id !== selectedElementId);
+    
+    const elementToDelete = pageElements.find(el => el.id === selectedElementId);
+    let updated = pageElements.filter((el) => el.id !== selectedElementId);
+    
+    if (selectedElementId.startsWith('text-edit-')) {
+      const timestamp = selectedElementId.replace('text-edit-', '');
+      const whiteoutId = `whiteout-orig-${timestamp}`;
+      updated = updated.filter((el) => el.id !== whiteoutId);
+      
+      if (elementToDelete && elementToDelete.type === 'text' && elementToDelete.originalTextId) {
+        const newHidden = new Set(hiddenOriginalTextIds);
+        newHidden.delete(elementToDelete.originalTextId);
+        setHiddenOriginalTextIds(newHidden);
+      }
+    }
+    
     pushToHistory({ ...elements, [currentPage]: updated });
     setSelectedElementId(null);
+    setEditingTextElementId(null);
   };
 
   // Guardado nativo
@@ -1030,7 +1085,7 @@ export default function Editor() {
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           onClick={() => fileInputRef.current?.click()}
-          className={`border-2 border-dashed rounded-3xl p-16 flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-350 ${
+          className={`border-2 border-dashed rounded-3xl p-16 flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-355 ${
             isDraggingOver 
               ? 'border-emerald-500 bg-emerald-500/5 dark:bg-emerald-500/10 scale-[0.99] shadow-inner' 
               : 'border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900/40 hover:border-emerald-400 hover:bg-slate-50 dark:hover:bg-slate-900/80'
@@ -1136,138 +1191,149 @@ export default function Editor() {
               </button>
             </div>
 
-            {/* Ajustes de Elementos Seleccionados */}
-            {selectedElement && (
+            {/* Ajustes de Elementos Seleccionados en la Barra Superior */}
+            {selectedElement && selectedElement.type === 'text' && editingTextElementId !== selectedElement.id && (
               <div className="flex flex-wrap items-center gap-3 bg-slate-50 dark:bg-slate-950 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-850">
-                {selectedElement.type === 'text' && (
-                  <>
-                    <span className="text-xs text-slate-400 font-bold select-none">Texto:</span>
-                    <input
-                      type="text"
-                      value={selectedElement.text}
-                      onChange={(e) => updateSelectedText(e.target.value)}
-                      className="bg-white dark:bg-slate-900 text-xs px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 w-44 outline-none text-slate-800 dark:text-slate-200 font-medium"
-                    />
-                    
-                    <select
-                      value={selectedElement.fontSize}
-                      onChange={(e) => updateSelectedFontSize(Number(e.target.value))}
-                      className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-800 dark:text-slate-200"
-                    >
-                      {[6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 40, 48, 56, 72].map((s) => (
-                        <option key={s} value={s}>{s}px</option>
-                      ))}
-                    </select>
+                <span className="text-xs text-slate-400 font-bold select-none">Texto:</span>
+                <input
+                  type="text"
+                  value={selectedElement.text}
+                  onChange={(e) => updateSelectedText(e.target.value)}
+                  className="bg-white dark:bg-slate-900 text-xs px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 w-44 outline-none text-slate-850 dark:text-slate-200 font-medium"
+                />
+                
+                <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
 
-                    {/* Controles de Estilos Tipográficos */}
-                    <div className="flex items-center gap-1.5 border-l border-r border-slate-200 dark:border-slate-800 px-2.5 py-0.5">
-                      <button
-                        onClick={toggleSelectedBold}
-                        className={`p-1.5 rounded-lg text-xs font-bold w-7 h-7 flex items-center justify-center transition-all ${
-                          selectedElement.fontWeight === 'bold'
-                            ? 'bg-emerald-500 text-white shadow-sm'
-                            : 'bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-850 text-slate-800 dark:text-slate-250 border border-slate-200 dark:border-slate-800'
-                        }`}
-                        title="Negrita"
-                      >
-                        N
-                      </button>
+                <span className="text-[10px] text-slate-400 font-semibold select-none">Tamaño:</span>
+                <select
+                  value={selectedElement.fontSize}
+                  onChange={(e) => updateSelectedFontSize(Number(e.target.value))}
+                  className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
+                >
+                  {[6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 40, 48, 56, 72].map((s) => (
+                    <option key={s} value={s}>{s}px</option>
+                  ))}
+                </select>
 
-                      <button
-                        onClick={toggleSelectedItalic}
-                        className={`p-1.5 rounded-lg text-xs italic font-semibold w-7 h-7 flex items-center justify-center transition-all ${
-                          selectedElement.fontStyle === 'italic'
-                            ? 'bg-emerald-500 text-white shadow-sm'
-                            : 'bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-850 text-slate-800 dark:text-slate-250 border border-slate-200 dark:border-slate-800'
-                        }`}
-                        title="Cursiva"
-                      >
-                        K
-                      </button>
+                <button
+                  onClick={toggleSelectedBold}
+                  className={`w-7 h-7 flex items-center justify-center rounded-lg font-bold text-xs ${
+                    selectedElement.fontWeight === 'bold'
+                      ? 'bg-emerald-500 text-white shadow-sm'
+                      : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                  title="Negrita"
+                >
+                  N
+                </button>
 
-                      <select
-                        value={selectedElement.fontFamily || 'sans-serif'}
-                        onChange={(e) => updateSelectedFontFamily(e.target.value as 'sans-serif' | 'serif')}
-                        className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-800 dark:text-slate-205"
-                      >
-                        <option value="sans-serif">Sans-Serif</option>
-                        <option value="serif">Serif (Times)</option>
-                      </select>
-                    </div>
+                <button
+                  onClick={toggleSelectedItalic}
+                  className={`w-7 h-7 flex items-center justify-center rounded-lg italic text-xs ${
+                    selectedElement.fontStyle === 'italic'
+                      ? 'bg-emerald-500 text-white shadow-sm'
+                      : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                  title="Cursiva"
+                >
+                  K
+                </button>
 
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[10px] text-slate-400 font-semibold select-none">Color:</span>
-                      <input
-                        type="color"
-                        value={selectedElement.color}
-                        onChange={(e) => updateSelectedColor(e.target.value)}
-                        className="w-7 h-7 p-0.5 rounded-lg cursor-pointer border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
-                      />
-                    </div>
-                  </>
-                )}
+                <select
+                  value={selectedElement.fontFamily || 'sans-serif'}
+                  onChange={(e) => updateSelectedFontFamily(e.target.value as 'sans-serif' | 'serif')}
+                  className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
+                >
+                  <option value="sans-serif">Sans-Serif</option>
+                  <option value="serif">Serif (Times)</option>
+                </select>
 
-                {selectedElement.type === 'shape' && (
-                  <>
-                    <span className="text-xs text-slate-400 font-bold select-none">Forma:</span>
-                    
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[10px] text-slate-400 font-semibold select-none">Relleno:</span>
-                      <input
-                        type="color"
-                        value={selectedElement.color}
-                        onChange={(e) => updateSelectedColor(e.target.value)}
-                        className="w-7 h-7 p-0.5 rounded-lg cursor-pointer border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
-                      />
-                    </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-slate-400 font-semibold select-none">Color:</span>
+                  <input
+                    type="color"
+                    value={selectedElement.color}
+                    onChange={(e) => updateSelectedColor(e.target.value)}
+                    className="w-7 h-7 p-0.5 rounded-lg cursor-pointer border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
+                    title="Color del texto"
+                  />
+                </div>
 
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[10px] text-slate-400 font-semibold select-none">Borde:</span>
-                      <input
-                        type="color"
-                        value={selectedElement.borderColor}
-                        onChange={(e) => updateSelectedBorderColor(e.target.value)}
-                        className="w-7 h-7 p-0.5 rounded-lg cursor-pointer border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
-                      />
-                    </div>
+                <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
 
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[10px] text-slate-400 font-semibold select-none">Grosor:</span>
-                      <select
-                        value={selectedElement.borderWidth}
-                        onChange={(e) => updateSelectedBorderWidth(Number(e.target.value))}
-                        className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
-                      >
-                        {[0, 1, 2, 3, 4, 6, 8, 12].map((w) => (
-                          <option key={w} value={w}>{w === 0 ? 'Sin Borde' : `${w}px`}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[10px] text-slate-400 font-semibold select-none">Opacidad:</span>
-                      <input
-                        type="range"
-                        min="0.1"
-                        max="1"
-                        step="0.05"
-                        value={selectedElement.opacity}
-                        onChange={(e) => updateSelectedOpacity(Number(e.target.value))}
-                        className="w-16 h-1 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
-                      />
-                      <span className="text-[10px] font-semibold w-7">{Math.round(selectedElement.opacity * 100)}%</span>
-                    </div>
-                  </>
-                )}
-
-                {selectedElement.type === 'image' && (
-                  <span className="text-xs text-slate-400 font-bold select-none">Firma / Imagen seleccionada</span>
-                )}
+                <button
+                  onClick={() => handleStartTextEdit(selectedElement)}
+                  className="bg-emerald-500 hover:bg-emerald-600 text-white text-xs px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm"
+                  title="Editar texto directamente"
+                >
+                  Editar en PDF
+                </button>
 
                 <button
                   onClick={deleteSelectedElement}
                   className="text-red-500 hover:text-red-650 hover:bg-red-500/10 p-1.5 rounded-lg transition-colors"
-                  title="Eliminar elemento del lienzo"
+                  title="Eliminar texto"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+
+            {/* Ajustes de Formas */}
+            {selectedElement && selectedElement.type === 'shape' && (
+              <div className="flex flex-wrap items-center gap-3 bg-slate-50 dark:bg-slate-950 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-850">
+                <span className="text-xs text-slate-400 font-bold select-none">Forma:</span>
+                
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-slate-400 font-semibold select-none">Relleno:</span>
+                  <input
+                    type="color"
+                    value={selectedElement.color}
+                    onChange={(e) => updateSelectedColor(e.target.value)}
+                    className="w-7 h-7 p-0.5 rounded-lg cursor-pointer border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
+                  />
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-slate-400 font-semibold select-none">Borde:</span>
+                  <input
+                    type="color"
+                    value={selectedElement.borderColor}
+                    onChange={(e) => updateSelectedBorderColor(e.target.value)}
+                    className="w-7 h-7 p-0.5 rounded-lg cursor-pointer border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
+                  />
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-slate-400 font-semibold select-none">Grosor:</span>
+                  <select
+                    value={selectedElement.borderWidth}
+                    onChange={(e) => updateSelectedBorderWidth(Number(e.target.value))}
+                    className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
+                  >
+                    {[0, 1, 2, 3, 4, 6, 8, 12].map((w) => (
+                      <option key={w} value={w}>{w === 0 ? 'Sin Borde' : `${w}px`}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-slate-400 font-semibold select-none">Opacidad:</span>
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="1"
+                    step="0.05"
+                    value={selectedElement.opacity}
+                    onChange={(e) => updateSelectedOpacity(Number(e.target.value))}
+                    className="w-16 h-1 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                  />
+                  <span className="text-[10px] font-semibold w-7">{Math.round(selectedElement.opacity * 100)}%</span>
+                </div>
+
+                <button
+                  onClick={deleteSelectedElement}
+                  className="text-red-500 hover:text-red-600 hover:bg-red-500/10 p-1.5 rounded-lg transition-colors"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
@@ -1351,7 +1417,7 @@ export default function Editor() {
                   {activePageDeleted ? (
                     <button
                       onClick={recoverActivePage}
-                      className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 rounded-lg text-xs font-semibold transition-all"
+                      className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-205 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 rounded-lg text-xs font-semibold transition-all"
                     >
                       Recuperar Página
                     </button>
@@ -1359,7 +1425,7 @@ export default function Editor() {
                     <>
                       <button
                         onClick={rotateActivePage}
-                        className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-205 dark:hover:bg-slate-750 text-slate-750 dark:text-slate-200 rounded-lg text-xs font-semibold transition-all"
+                        className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-750 text-slate-750 dark:text-slate-200 rounded-lg text-xs font-semibold transition-all"
                         title="Rotar página 90 grados"
                       >
                         <RotateCw className="h-3.5 w-3.5" />
@@ -1367,7 +1433,7 @@ export default function Editor() {
                       </button>
                       <button
                         onClick={deleteActivePage}
-                        className="flex items-center gap-1 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 rounded-lg text-xs font-semibold transition-all"
+                        className="flex items-center gap-1 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-450 rounded-lg text-xs font-semibold transition-all"
                         title="Eliminar página"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -1382,7 +1448,14 @@ export default function Editor() {
               <div 
                 className="relative overflow-auto border border-slate-200 dark:border-slate-800 rounded-3xl max-w-full bg-slate-100 dark:bg-slate-900/30 flex justify-center items-center p-4 min-h-[400px] w-full transition-colors"
                 onClick={(e) => {
+                  if (wasElementClickRef.current) {
+                    wasElementClickRef.current = false;
+                    return;
+                  }
                   if (e.target === e.currentTarget || (e.target as HTMLElement).tagName === 'CANVAS') {
+                    if (editingTextElementId) {
+                      handleConfirmTextEdit(editingTextElementId);
+                    }
                     setSelectedElementId(null);
                   }
                 }}
@@ -1445,8 +1518,133 @@ export default function Editor() {
                       {/* 2. Capa de Elementos de Edición */}
                       {pageElements.map((el) => {
                         const isSel = el.id === selectedElementId;
+                        const isEditing = el.id === editingTextElementId;
 
                         if (el.type === 'text') {
+                          if (isEditing) {
+                            return (
+                              <React.Fragment key={el.id}>
+                                {/* Campo de texto directo en la posición del PDF */}
+                                <input
+                                  type="text"
+                                  value={tempText}
+                                  onChange={(e) => setTempText(e.target.value)}
+                                  autoFocus
+                                  onClick={(e) => e.stopPropagation()}
+                                  onPointerDown={(e) => e.stopPropagation()}
+                                  onPointerUp={(e) => e.stopPropagation()}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') handleConfirmTextEdit(el.id);
+                                    if (e.key === 'Escape') handleCancelTextEdit();
+                                  }}
+                                  className="absolute border border-emerald-500 bg-white dark:bg-slate-900 outline-none rounded shadow-md px-1.5 py-0.5 text-slate-900 dark:text-slate-100 pointer-events-auto z-40 font-sans"
+                                  style={{
+                                    left: `${el.x * 100}%`,
+                                    top: `${el.y * 100}%`,
+                                    fontSize: `${el.fontSize * (zoom / 2)}px`,
+                                    color: el.color,
+                                    fontFamily: el.fontFamily === 'serif' ? 'Georgia, "Times New Roman", serif' : 'Helvetica, Arial, sans-serif',
+                                    fontWeight: el.fontWeight || 'normal',
+                                    fontStyle: el.fontStyle || 'normal',
+                                    width: `${Math.max(120, tempText.length * el.fontSize * (zoom / 3.5))}px`,
+                                    willChange: 'left, top',
+                                  }}
+                                />
+
+                                {/* Panel flotante de ajustes tipográficos y de color directamente bajo el input */}
+                                <div 
+                                  className="absolute z-40 pointer-events-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl p-3 flex flex-col gap-2.5 min-w-[280px]"
+                                  style={{
+                                    left: `${el.x * 100}%`,
+                                    top: `${el.y * 100}%`,
+                                    transform: `translate(0, ${el.fontSize * (zoom / 2) + 20}px)`, 
+                                    willChange: 'left, top',
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onPointerDown={(e) => e.stopPropagation()}
+                                  onPointerUp={(e) => e.stopPropagation()}
+                                >
+                                  {/* Formato y Color */}
+                                  <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 dark:border-slate-800 pb-2">
+                                    <select
+                                      value={el.fontSize}
+                                      onChange={(e) => updateSelectedFontSize(Number(e.target.value))}
+                                      className="bg-slate-50 dark:bg-slate-950 text-xs px-2 py-1 rounded border border-slate-200 dark:border-slate-800 outline-none text-slate-800 dark:text-slate-200"
+                                    >
+                                      {[6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 40, 48, 56, 72].map((s) => (
+                                        <option key={s} value={s}>{s}px</option>
+                                      ))}
+                                    </select>
+
+                                    <button
+                                      onClick={toggleSelectedBold}
+                                      className={`w-7 h-7 flex items-center justify-center rounded font-bold text-xs ${
+                                        el.fontWeight === 'bold'
+                                          ? 'bg-emerald-500 text-white shadow-sm'
+                                          : 'bg-slate-100 dark:bg-slate-950 text-slate-800 dark:text-slate-200'
+                                      }`}
+                                    >
+                                      N
+                                    </button>
+
+                                    <button
+                                      onClick={toggleSelectedItalic}
+                                      className={`w-7 h-7 flex items-center justify-center rounded italic text-xs ${
+                                        el.fontStyle === 'italic'
+                                          ? 'bg-emerald-500 text-white shadow-sm'
+                                          : 'bg-slate-100 dark:bg-slate-950 text-slate-800 dark:text-slate-200'
+                                      }`}
+                                    >
+                                      K
+                                    </button>
+
+                                    <select
+                                      value={el.fontFamily || 'sans-serif'}
+                                      onChange={(e) => updateSelectedFontFamily(e.target.value as 'sans-serif' | 'serif')}
+                                      className="bg-slate-50 dark:bg-slate-950 text-xs px-2 py-1 rounded border border-slate-200 dark:border-slate-800 outline-none text-slate-800 dark:text-slate-200"
+                                    >
+                                      <option value="sans-serif">Sans-Serif</option>
+                                      <option value="serif">Serif (Times)</option>
+                                    </select>
+
+                                    {/* Selector de Color directo en el popup */}
+                                    <input
+                                      type="color"
+                                      value={el.color}
+                                      onChange={(e) => updateSelectedColor(e.target.value)}
+                                      className="w-7 h-7 p-0.5 rounded cursor-pointer border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950"
+                                      title="Cambiar color del texto"
+                                    />
+                                  </div>
+
+                                  {/* Acciones */}
+                                  <div className="flex justify-between items-center text-xs">
+                                    <button
+                                      onClick={deleteSelectedElement}
+                                      className="text-red-500 hover:bg-red-500/10 px-2 py-1 rounded transition-colors font-bold"
+                                    >
+                                      Eliminar
+                                    </button>
+                                    <div className="flex gap-1.5">
+                                      <button
+                                        onClick={handleCancelTextEdit}
+                                        className="text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 px-2 py-1 rounded transition-colors"
+                                      >
+                                        Cancelar
+                                      </button>
+                                      <button
+                                        onClick={() => handleConfirmTextEdit(el.id)}
+                                        className="bg-emerald-500 hover:bg-emerald-600 text-white px-3 py-1 rounded font-bold shadow-sm"
+                                      >
+                                        Aceptar
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              </React.Fragment>
+                            );
+                          }
+
                           return (
                             <div
                               key={el.id}
@@ -1455,18 +1653,17 @@ export default function Editor() {
                               onClick={(e) => e.stopPropagation()}
                               onDoubleClick={(e) => {
                                 e.stopPropagation();
-                                const newTxt = prompt('Editar texto:', el.text);
-                                if (newTxt !== null) updateSelectedText(newTxt);
+                                handleStartTextEdit(el);
                               }}
                               className={`absolute cursor-move select-none pointer-events-auto px-2 py-1 rounded transition-all group ${
                                 isSel 
-                                  ? 'outline outline-2 outline-emerald-500 bg-white/95 dark:bg-slate-900/95 shadow-md z-30' 
+                                  ? 'outline outline-2 outline-emerald-500 bg-white/90 dark:bg-slate-900/90 shadow-md z-30 font-sans' 
                                   : 'hover:bg-slate-500/10 hover:outline hover:outline-1 hover:outline-slate-400'
                               }`}
                               style={{
                                 left: `${el.x * 100}%`,
                                 top: `${el.y * 100}%`,
-                                fontSize: `${el.fontSize * (zoom / 2)}px`, // CORRECCIÓN: Escalado de fuente dinámico según el zoom de pantalla
+                                fontSize: `${el.fontSize * (zoom / 2)}px`,
                                 color: el.color,
                                 fontFamily: el.fontFamily === 'serif' ? 'Georgia, "Times New Roman", serif' : 'Helvetica, Arial, sans-serif',
                                 fontWeight: el.fontWeight || 'normal',
@@ -1564,7 +1761,7 @@ export default function Editor() {
                 <button
                   onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
                   disabled={currentPage === 1}
-                  className="p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-700 dark:text-slate-200 disabled:opacity-40 transition-all shadow-sm"
+                  className="p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-700 dark:text-slate-200 disabled:opacity-40 transition-all shadow-sm animate-colors"
                 >
                   <ChevronLeft className="h-5 w-5" />
                 </button>
@@ -1574,7 +1771,7 @@ export default function Editor() {
                 <button
                   onClick={() => setCurrentPage(Math.min(numPages, currentPage + 1))}
                   disabled={currentPage === numPages}
-                  className="p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-700 dark:text-slate-200 disabled:opacity-40 transition-all shadow-sm"
+                  className="p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-700 dark:text-slate-200 disabled:opacity-40 transition-all shadow-sm animate-colors"
                 >
                   <ChevronRight className="h-5 w-5" />
                 </button>
