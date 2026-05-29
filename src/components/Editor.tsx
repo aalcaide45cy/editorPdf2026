@@ -5,7 +5,6 @@ import {
   Upload, 
   Trash2, 
   RotateCw, 
-  Plus, 
   Download, 
   Type, 
   FileImage, 
@@ -15,15 +14,15 @@ import {
   ChevronLeft, 
   ChevronRight, 
   ShieldAlert,
-  Sparkles,
   RefreshCw,
-  X
+  Square,
+  Circle,
+  Layers
 } from 'lucide-react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { PDFDocument, rgb, degrees, StandardFonts } from 'pdf-lib';
 import SignaturePad from './SignaturePad';
 
-// Configurar el worker usando unpkg CDN para Next.js estático
 if (typeof window !== 'undefined') {
   pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js`;
 }
@@ -32,8 +31,8 @@ interface TextElement {
   id: string;
   type: 'text';
   text: string;
-  x: number; // Porcentaje del contenedor (0 a 1)
-  y: number; // Porcentaje del contenedor (0 a 1)
+  x: number;
+  y: number;
   fontSize: number;
   color: string;
 }
@@ -42,13 +41,27 @@ interface ImageElement {
   id: string;
   type: 'image';
   dataUrl: string;
-  x: number; // Porcentaje del contenedor (0 a 1)
-  y: number; // Porcentaje del contenedor (0 a 1)
-  width: number; // Porcentaje de ancho (0 a 1)
-  height: number; // Porcentaje de alto (0 a 1)
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
-type EditorElement = TextElement | ImageElement;
+interface ShapeElement {
+  id: string;
+  type: 'shape';
+  shapeType: 'rect' | 'circle';
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: string; // Relleno
+  borderColor: string;
+  borderWidth: number;
+  opacity: number;
+}
+
+type EditorElement = TextElement | ImageElement | ShapeElement;
 
 export default function Editor() {
   // Document states
@@ -68,19 +81,20 @@ export default function Editor() {
   const [deletedPages, setDeletedPages] = useState<Set<number>>(new Set());
 
   // Editing items state
-  // key is page number, value is list of elements
   const [elements, setElements] = useState<{ [page: number]: EditorElement[] }>({});
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
   
   // Interactive tools states
-  const [activeTool, setActiveTool] = useState<'select' | 'text' | 'signature' | 'image'>('select');
   const [showSignaturePad, setShowSignaturePad] = useState(false);
   
-  // Dragging states
-  const [isDraggingElement, setIsDraggingElement] = useState(false);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-  const [isResizingElement, setIsResizingElement] = useState(false);
-  const [initialResizeData, setInitialResizeData] = useState({ width: 0, height: 0, startX: 0, startY: 0 });
+  // Drag & Resize references for HIGH PERFORMANCE (Zero Lag)
+  const isDraggingRef = useRef(false);
+  const isResizingRef = useRef(false);
+  const dragTargetRef = useRef<HTMLDivElement | null>(null);
+  const dragOffsetRef = useRef({ x: 0, y: 0 });
+  const elementCoordsRef = useRef({ x: 0, y: 0 });
+  const resizeDataRef = useRef({ width: 0, height: 0, startX: 0, startY: 0 });
+  const elementSizeRef = useRef({ width: 0, height: 0 });
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -110,7 +124,6 @@ export default function Editor() {
     if (!pdfDocProxy || !canvasRef.current) return;
 
     try {
-      // Si la página está marcada como eliminada, no renderizar o mostrar aviso
       if (deletedPages.has(pageNum)) {
         const canvas = canvasRef.current;
         const ctx = canvas.getContext('2d');
@@ -128,7 +141,6 @@ export default function Editor() {
       const rotation = rotations[pageNum] || 0;
       const viewport = page.getViewport({ scale: zoom, rotation });
 
-      // Configurar dimensiones
       canvas.width = viewport.width;
       canvas.height = viewport.height;
 
@@ -159,7 +171,6 @@ export default function Editor() {
         const bytes = e.target?.result as ArrayBuffer;
         setPdfBytes(bytes);
         
-        // Cargar documento en PDF.js
         const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(bytes) });
         const doc = await loadingTask.promise;
         setPdfDocProxy(doc);
@@ -189,7 +200,6 @@ export default function Editor() {
     setDeletedPages(new Set());
     setElements({});
     setSelectedElementId(null);
-    setActiveTool('select');
     setLoadingMsg('');
   };
 
@@ -223,7 +233,6 @@ export default function Editor() {
       newDeleted.add(currentPage);
       setDeletedPages(newDeleted);
       
-      // Buscar siguiente página no eliminada
       let nextAvailable = 1;
       for (let i = 1; i <= numPages; i++) {
         if (!newDeleted.has(i)) {
@@ -267,8 +276,8 @@ export default function Editor() {
       dataUrl: dataUrl,
       x: 0.2,
       y: 0.2,
-      width: 0.25, // 25% del ancho del canvas
-      height: 0.1, // 10% de alto aproximado
+      width: 0.25,
+      height: 0.1,
     };
     const pageElements = elements[currentPage] || [];
     setElements({
@@ -277,6 +286,28 @@ export default function Editor() {
     });
     setSelectedElementId(newSig.id);
     setShowSignaturePad(false);
+  };
+
+  const addShapeElement = (shapeType: 'rect' | 'circle') => {
+    const newShape: ShapeElement = {
+      id: `shape-${Date.now()}`,
+      type: 'shape',
+      shapeType: shapeType,
+      x: 0.3,
+      y: 0.3,
+      width: 0.2,
+      height: 0.15,
+      color: '#ffffff', // relleno blanco
+      borderColor: '#059669', // borde esmeralda
+      borderWidth: 2,
+      opacity: 1.0,
+    };
+    const pageElements = elements[currentPage] || [];
+    setElements({
+      ...elements,
+      [currentPage]: [...pageElements, newShape],
+    });
+    setSelectedElementId(newShape.id);
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -306,13 +337,16 @@ export default function Editor() {
     }
   };
 
-  // Eventos de drag-and-drop para mover elementos
-  const handleElementPointerDown = (e: React.PointerEvent, element: EditorElement) => {
+  // --- LÓGICA DE ARRASTRE Y REDIMENSIÓN DE ALTO RENDIMIENTO (SIN LAG) ---
+  const handleElementPointerDown = (e: React.PointerEvent<HTMLDivElement>, element: EditorElement) => {
     e.stopPropagation();
     setSelectedElementId(element.id);
     
     const container = containerRef.current;
     if (!container) return;
+
+    dragTargetRef.current = e.currentTarget;
+    isDraggingRef.current = true;
 
     const rect = container.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
@@ -321,86 +355,114 @@ export default function Editor() {
     const elemX = element.x * rect.width;
     const elemY = element.y * rect.height;
 
-    setDragOffset({
+    dragOffsetRef.current = {
       x: clickX - elemX,
       y: clickY - elemY,
-    });
-    setIsDraggingElement(true);
+    };
+    elementCoordsRef.current = { x: element.x, y: element.y };
+
+    container.setPointerCapture(e.pointerId);
+  };
+
+  const startResize = (e: React.PointerEvent, element: ImageElement | ShapeElement) => {
+    e.stopPropagation();
+    setSelectedElementId(element.id);
+    isResizingRef.current = true;
+    
+    const container = containerRef.current;
+    if (!container || !containerRef.current) return;
+
+    const parentNode = (e.target as HTMLElement).parentNode as HTMLDivElement;
+    dragTargetRef.current = parentNode;
+
+    const rect = container.getBoundingClientRect();
+    resizeDataRef.current = {
+      width: element.width,
+      height: element.height,
+      startX: e.clientX - rect.left,
+      startY: e.clientY - rect.top,
+    };
+    elementSizeRef.current = { width: element.width, height: element.height };
+
     container.setPointerCapture(e.pointerId);
   };
 
   const handleContainerPointerMove = (e: React.PointerEvent) => {
     const container = containerRef.current;
-    if (!container || !selectedElementId) return;
+    if (!container || !selectedElementId || !dragTargetRef.current) return;
 
     const rect = container.getBoundingClientRect();
     const currentX = e.clientX - rect.left;
     const currentY = e.clientY - rect.top;
 
-    if (isDraggingElement) {
-      const pageElements = elements[currentPage] || [];
-      const updated = pageElements.map((el) => {
-        if (el.id === selectedElementId) {
-          // Nuevas coordenadas relativas restringidas a 0..1
-          let newX = (currentX - dragOffset.x) / rect.width;
-          let newY = (currentY - dragOffset.y) / rect.height;
-          newX = Math.max(0, Math.min(1, newX));
-          newY = Math.max(0, Math.min(1, newY));
-          return { ...el, x: newX, y: newY } as EditorElement;
-        }
-        return el;
-      });
-      setElements({ ...elements, [currentPage]: updated });
-    } else if (isResizingElement) {
-      const pageElements = elements[currentPage] || [];
-      const updated = pageElements.map((el) => {
-        if (el.id === selectedElementId && el.type === 'image') {
-          const deltaX = currentX - initialResizeData.startX;
-          const deltaY = currentY - initialResizeData.startY;
-          
-          let newWidth = initialResizeData.width + (deltaX / rect.width);
-          let newHeight = initialResizeData.height + (deltaY / rect.height);
-          
-          newWidth = Math.max(0.05, Math.min(1 - el.x, newWidth));
-          newHeight = Math.max(0.02, Math.min(1 - el.y, newHeight));
-          
-          return { ...el, width: newWidth, height: newHeight } as ImageElement;
-        }
-        return el;
-      });
-      setElements({ ...elements, [currentPage]: updated });
+    if (isDraggingRef.current) {
+      let newX = (currentX - dragOffsetRef.current.x) / rect.width;
+      let newY = (currentY - dragOffsetRef.current.y) / rect.height;
+      newX = Math.max(0, Math.min(1, newX));
+      newY = Math.max(0, Math.min(1, newY));
+      
+      elementCoordsRef.current = { x: newX, y: newY };
+      
+      // Actualizar el DOM directamente a 60fps (sin lag)
+      dragTargetRef.current.style.left = `${newX * 100}%`;
+      dragTargetRef.current.style.top = `${newY * 100}%`;
+      
+    } else if (isResizingRef.current) {
+      const deltaX = currentX - resizeDataRef.current.startX;
+      const deltaY = currentY - resizeDataRef.current.startY;
+      
+      let newWidth = resizeDataRef.current.width + (deltaX / rect.width);
+      let newHeight = resizeDataRef.current.height + (deltaY / rect.height);
+      
+      // Limitar tamaños
+      const el = (elements[currentPage] || []).find(item => item.id === selectedElementId);
+      if (el) {
+        newWidth = Math.max(0.02, Math.min(1 - el.x, newWidth));
+        newHeight = Math.max(0.01, Math.min(1 - el.y, newHeight));
+        
+        elementSizeRef.current = { width: newWidth, height: newHeight };
+        
+        // Actualizar el DOM directamente
+        dragTargetRef.current.style.width = `${newWidth * 100}%`;
+        dragTargetRef.current.style.height = `${newHeight * 100}%`;
+      }
     }
   };
 
   const handleContainerPointerUp = (e: React.PointerEvent) => {
-    setIsDraggingElement(false);
-    setIsResizingElement(false);
     const container = containerRef.current;
     if (container) {
       container.releasePointerCapture(e.pointerId);
     }
+
+    if (isDraggingRef.current && selectedElementId) {
+      // Guardar el estado final en React
+      const pageElements = elements[currentPage] || [];
+      const updated = pageElements.map((el) => {
+        if (el.id === selectedElementId) {
+          return { ...el, x: elementCoordsRef.current.x, y: elementCoordsRef.current.y };
+        }
+        return el;
+      });
+      setElements({ ...elements, [currentPage]: updated });
+    } else if (isResizingRef.current && selectedElementId) {
+      // Guardar el estado final de tamaño en React
+      const pageElements = elements[currentPage] || [];
+      const updated = pageElements.map((el) => {
+        if (el.id === selectedElementId && (el.type === 'image' || el.type === 'shape')) {
+          return { ...el, width: elementSizeRef.current.width, height: elementSizeRef.current.height };
+        }
+        return el;
+      });
+      setElements({ ...elements, [currentPage]: updated });
+    }
+
+    isDraggingRef.current = false;
+    isResizingRef.current = false;
+    dragTargetRef.current = null;
   };
 
-  // Redimensionar imágenes
-  const startResize = (e: React.PointerEvent, element: ImageElement) => {
-    e.stopPropagation();
-    setSelectedElementId(element.id);
-    setIsResizingElement(true);
-    
-    const container = containerRef.current;
-    if (!container) return;
-
-    const rect = container.getBoundingClientRect();
-    setInitialResizeData({
-      width: element.width,
-      height: element.height,
-      startX: e.clientX - rect.left,
-      startY: e.clientY - rect.top,
-    });
-    container.setPointerCapture(e.pointerId);
-  };
-
-  // Modificar propiedades del texto seleccionado
+  // Modificar propiedades del elemento seleccionado
   const updateSelectedText = (text: string) => {
     const pageElements = elements[currentPage] || [];
     const updated = pageElements.map((el) => {
@@ -426,8 +488,41 @@ export default function Editor() {
   const updateSelectedColor = (color: string) => {
     const pageElements = elements[currentPage] || [];
     const updated = pageElements.map((el) => {
-      if (el.id === selectedElementId && el.type === 'text') {
-        return { ...el, color } as TextElement;
+      if (el.id === selectedElementId) {
+        return { ...el, color } as any;
+      }
+      return el;
+    });
+    setElements({ ...elements, [currentPage]: updated });
+  };
+
+  const updateSelectedBorderColor = (borderColor: string) => {
+    const pageElements = elements[currentPage] || [];
+    const updated = pageElements.map((el) => {
+      if (el.id === selectedElementId && el.type === 'shape') {
+        return { ...el, borderColor } as ShapeElement;
+      }
+      return el;
+    });
+    setElements({ ...elements, [currentPage]: updated });
+  };
+
+  const updateSelectedBorderWidth = (borderWidth: number) => {
+    const pageElements = elements[currentPage] || [];
+    const updated = pageElements.map((el) => {
+      if (el.id === selectedElementId && el.type === 'shape') {
+        return { ...el, borderWidth } as ShapeElement;
+      }
+      return el;
+    });
+    setElements({ ...elements, [currentPage]: updated });
+  };
+
+  const updateSelectedOpacity = (opacity: number) => {
+    const pageElements = elements[currentPage] || [];
+    const updated = pageElements.map((el) => {
+      if (el.id === selectedElementId && el.type === 'shape') {
+        return { ...el, opacity } as ShapeElement;
       }
       return el;
     });
@@ -442,39 +537,33 @@ export default function Editor() {
     setSelectedElementId(null);
   };
 
-  // Compilación con pdf-lib e inversión de coordenadas Y
+  // Compilación final con pdf-lib e inversión Y
   const compileAndDownload = async () => {
     if (!pdfBytes) return;
 
-    setLoadingMsg('Compilando y firmando el PDF de forma local...');
+    setLoadingMsg('Compilando y estructurando el PDF de forma local...');
 
     try {
-      // 1. Cargar el PDF original
       const pdfDoc = await PDFDocument.load(pdfBytes);
-      
-      // 2. Obtener todas las páginas
       const allPages = pdfDoc.getPages();
 
-      // Helper para convertir color hex a RGB (0..1)
       const hexToRgb = (hex: string) => {
+        if (!hex || hex.length < 7) return rgb(0, 0, 0);
         const r = parseInt(hex.slice(1, 3), 16) / 255;
         const g = parseInt(hex.slice(3, 5), 16) / 255;
         const b = parseInt(hex.slice(5, 7), 16) / 255;
         return rgb(r, g, b);
       };
 
-      // 3. Modificar cada página
       for (let i = 0; i < allPages.length; i++) {
         const pageNum = i + 1;
         const page = allPages[i];
 
-        // Aplicar rotación si existe
         if (rotations[pageNum]) {
           const currentRot = page.getRotation().angle;
           page.setRotation(degrees((currentRot + rotations[pageNum]) % 360));
         }
 
-        // Si la página tiene elementos añadidos, dibujarlos
         const pageElements = elements[pageNum] || [];
         if (pageElements.length > 0) {
           const { width, height } = page.getSize();
@@ -482,10 +571,6 @@ export default function Editor() {
           for (const el of pageElements) {
             if (el.type === 'text') {
               const helveticaFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
-              
-              // Inversión de coordenadas Y: 
-              // En HTML5 Canvas, y=0 es arriba. En PDF-Lib, y=0 es abajo.
-              // pdfY = height - (yPercent * height) - fontSize
               const elPdfX = el.x * width;
               const elPdfY = height - (el.y * height) - (el.fontSize * 0.95);
 
@@ -497,11 +582,9 @@ export default function Editor() {
                 color: hexToRgb(el.color),
               });
             } else if (el.type === 'image') {
-              // Convertir dataUrl (base64) a bytes
               const base64Data = el.dataUrl.split(',')[1];
               const imageBytes = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
               
-              // Cargar imagen en el documento
               let pdfImage;
               if (el.dataUrl.includes('image/png')) {
                 pdfImage = await pdfDoc.embedPng(imageBytes);
@@ -509,12 +592,8 @@ export default function Editor() {
                 pdfImage = await pdfDoc.embedJpg(imageBytes);
               }
 
-              // Calcular tamaños
               const elPdfWidth = el.width * width;
               const elPdfHeight = el.height * height;
-              
-              // Inversión de coordenadas Y:
-              // pdfY = height - (yPercent * height) - elPdfHeight
               const elPdfX = el.x * width;
               const elPdfY = height - (el.y * height) - elPdfHeight;
 
@@ -524,16 +603,46 @@ export default function Editor() {
                 width: elPdfWidth,
                 height: elPdfHeight,
               });
+            } else if (el.type === 'shape') {
+              const elPdfWidth = el.width * width;
+              const elPdfHeight = el.height * height;
+              const elPdfX = el.x * width;
+              const elPdfY = height - (el.y * height) - elPdfHeight;
+
+              const fillColor = hexToRgb(el.color);
+              const borderCol = hexToRgb(el.borderColor);
+
+              if (el.shapeType === 'rect') {
+                page.drawRectangle({
+                  x: elPdfX,
+                  y: elPdfY,
+                  width: elPdfWidth,
+                  height: elPdfHeight,
+                  color: fillColor,
+                  borderColor: borderCol,
+                  borderWidth: el.borderWidth,
+                  opacity: el.opacity,
+                });
+              } else if (el.shapeType === 'circle') {
+                page.drawEllipse({
+                  x: elPdfX + elPdfWidth / 2,
+                  y: elPdfY + elPdfHeight / 2,
+                  xScale: elPdfWidth / 2,
+                  yScale: elPdfHeight / 2,
+                  color: fillColor,
+                  borderColor: borderCol,
+                  borderWidth: el.borderWidth,
+                  opacity: el.opacity,
+                });
+              }
             }
           }
         }
       }
 
-      // 4. Eliminar páginas marcadas
       if (deletedPages.size > 0) {
-        // Eliminar en orden inverso para no alterar los índices durante la eliminación
         const sortedIndices = Array.from(deletedPages)
-          .map((p) => p - 1) // Convertir a base 0
+          .map((p) => p - 1)
           .sort((a, b) => b - a);
 
         for (const index of sortedIndices) {
@@ -541,9 +650,7 @@ export default function Editor() {
         }
       }
 
-      // 5. Guardar el PDF y descargarlo
       const modifiedPdfBytes = await pdfDoc.save();
-      
       const blob = new Blob([modifiedPdfBytes] as BlobPart[], { type: 'application/pdf' });
       const downloadUrl = URL.createObjectURL(blob);
       
@@ -554,7 +661,6 @@ export default function Editor() {
       document.body.appendChild(link);
       link.click();
       
-      // Limpieza inmediata de memoria
       document.body.removeChild(link);
       URL.revokeObjectURL(downloadUrl);
       setLoadingMsg('');
@@ -570,8 +676,8 @@ export default function Editor() {
   const selectedElement = pageElements.find((el) => el.id === selectedElementId);
 
   return (
-    <div className="w-full flex flex-col gap-6">
-      {/* Loading Overlay */}
+    <div className="w-full flex flex-col gap-6 text-slate-900 dark:text-slate-100">
+      
       {loadingMsg && (
         <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-md z-[110] flex flex-col items-center justify-center text-center px-4">
           <RefreshCw className="h-12 w-12 text-emerald-500 animate-spin mb-4" />
@@ -580,7 +686,6 @@ export default function Editor() {
         </div>
       )}
 
-      {/* Signature Pad Modal */}
       {showSignaturePad && (
         <SignaturePad 
           onSave={addSignatureElement} 
@@ -588,7 +693,6 @@ export default function Editor() {
         />
       )}
 
-      {/* Inputs ocultos */}
       <input 
         ref={fileInputRef}
         type="file"
@@ -604,7 +708,7 @@ export default function Editor() {
         className="hidden"
       />
 
-      {/* ESTADO INICIAL: Drop Zone */}
+      {/* DRAG AND DROP ZONE */}
       {!pdfDocProxy ? (
         <div 
           onDragOver={handleDragOver}
@@ -631,13 +735,13 @@ export default function Editor() {
           </div>
         </div>
       ) : (
-        /* ESTADO DE EDICIÓN: Workspace */
+        /* WORKSPACE */
         <div className="flex flex-col gap-4">
           
-          {/* BARRA DE HERRAMIENTAS SUPERIOR */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm flex flex-wrap items-center justify-between gap-4">
+          {/* BARRA DE HERRAMIENTAS */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm flex flex-wrap items-center justify-between gap-4 transition-colors">
             
-            {/* Herramientas de Inserción */}
+            {/* Acciones de Inserción */}
             <div className="flex items-center gap-2">
               <button
                 onClick={addTextElement}
@@ -646,7 +750,7 @@ export default function Editor() {
                 title="Añadir Texto"
               >
                 <Type className="h-4 w-4" />
-                <span>Añadir Texto</span>
+                <span>Texto</span>
               </button>
 
               <button
@@ -668,41 +772,126 @@ export default function Editor() {
                 <FileImage className="h-4 w-4" />
                 <span>Imagen</span>
               </button>
+
+              {/* Formas Básicas */}
+              <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1" />
+
+              <button
+                onClick={() => addShapeElement('rect')}
+                disabled={activePageDeleted}
+                className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
+                title="Añadir Rectángulo"
+              >
+                <Square className="h-4 w-4" />
+                <span>Rectángulo</span>
+              </button>
+
+              <button
+                onClick={() => addShapeElement('circle')}
+                disabled={activePageDeleted}
+                className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
+                title="Añadir Círculo"
+              >
+                <Circle className="h-4 w-4" />
+                <span>Círculo</span>
+              </button>
             </div>
 
-            {/* Ajustes de Elemento Seleccionado */}
-            {selectedElement && selectedElement.type === 'text' && (
-              <div className="flex items-center gap-3 bg-slate-50 dark:bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-850">
-                <span className="text-xs text-slate-400 font-semibold select-none">Texto:</span>
-                <input
-                  type="text"
-                  value={selectedElement.text}
-                  onChange={(e) => updateSelectedText(e.target.value)}
-                  className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded border border-slate-200 dark:border-slate-800 w-36 outline-none"
-                />
-                
-                {/* Tamaño de fuente */}
-                <select
-                  value={selectedElement.fontSize}
-                  onChange={(e) => updateSelectedFontSize(Number(e.target.value))}
-                  className="bg-white dark:bg-slate-900 text-xs px-1.5 py-1 rounded border border-slate-200 dark:border-slate-800 outline-none"
-                >
-                  {[10, 12, 14, 16, 18, 20, 24, 28, 32, 40].map((s) => (
-                    <option key={s} value={s}>{s}px</option>
-                  ))}
-                </select>
+            {/* Ajustes de Elementos */}
+            {selectedElement && (
+              <div className="flex flex-wrap items-center gap-3 bg-slate-50 dark:bg-slate-950 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-850">
+                {selectedElement.type === 'text' && (
+                  <>
+                    <span className="text-xs text-slate-400 font-bold select-none">Texto:</span>
+                    <input
+                      type="text"
+                      value={selectedElement.text}
+                      onChange={(e) => updateSelectedText(e.target.value)}
+                      className="bg-white dark:bg-slate-900 text-xs px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 w-44 outline-none text-slate-800 dark:text-slate-200"
+                    />
+                    
+                    <select
+                      value={selectedElement.fontSize}
+                      onChange={(e) => updateSelectedFontSize(Number(e.target.value))}
+                      className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-800 dark:text-slate-200"
+                    >
+                      {[8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 40, 48].map((s) => (
+                        <option key={s} value={s}>{s}px</option>
+                      ))}
+                    </select>
 
-                {/* Color */}
-                <input
-                  type="color"
-                  value={selectedElement.color}
-                  onChange={(e) => updateSelectedColor(e.target.value)}
-                  className="w-6 h-6 p-0 rounded-md cursor-pointer border border-slate-200 dark:border-slate-800"
-                />
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-slate-400 font-semibold select-none">Color:</span>
+                      <input
+                        type="color"
+                        value={selectedElement.color}
+                        onChange={(e) => updateSelectedColor(e.target.value)}
+                        className="w-7 h-7 p-0.5 rounded-lg cursor-pointer border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
+                      />
+                    </div>
+                  </>
+                )}
+
+                {selectedElement.type === 'shape' && (
+                  <>
+                    <span className="text-xs text-slate-400 font-bold select-none">Forma:</span>
+                    
+                    {/* Color de Relleno */}
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-slate-400 font-semibold select-none">Relleno:</span>
+                      <input
+                        type="color"
+                        value={selectedElement.color}
+                        onChange={(e) => updateSelectedColor(e.target.value)}
+                        className="w-7 h-7 p-0.5 rounded-lg cursor-pointer border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
+                      />
+                    </div>
+
+                    {/* Color de Borde */}
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-slate-400 font-semibold select-none">Borde:</span>
+                      <input
+                        type="color"
+                        value={selectedElement.borderColor}
+                        onChange={(e) => updateSelectedBorderColor(e.target.value)}
+                        className="w-7 h-7 p-0.5 rounded-lg cursor-pointer border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
+                      />
+                    </div>
+
+                    {/* Grosor de Borde */}
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-slate-400 font-semibold select-none">Línea:</span>
+                      <select
+                        value={selectedElement.borderWidth}
+                        onChange={(e) => updateSelectedBorderWidth(Number(e.target.value))}
+                        className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
+                      >
+                        {[0, 1, 2, 3, 4, 6, 8].map((w) => (
+                          <option key={w} value={w}>{w === 0 ? 'Sin Borde' : `${w}px`}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Transparencia / Opacidad */}
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-slate-400 font-semibold select-none">Opacidad:</span>
+                      <input
+                        type="range"
+                        min="0.1"
+                        max="1"
+                        step="0.1"
+                        value={selectedElement.opacity}
+                        onChange={(e) => updateSelectedOpacity(Number(e.target.value))}
+                        className="w-16 h-1 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                      />
+                      <span className="text-[10px] font-semibold w-7">{Math.round(selectedElement.opacity * 100)}%</span>
+                    </div>
+                  </>
+                )}
 
                 <button
                   onClick={deleteSelectedElement}
-                  className="text-red-500 hover:text-red-600 dark:hover:text-red-400 transition-colors p-1"
+                  className="text-red-500 hover:text-red-650 hover:bg-red-500/10 p-1.5 rounded-lg transition-colors"
                   title="Eliminar elemento"
                 >
                   <Trash2 className="h-4 w-4" />
@@ -710,21 +899,7 @@ export default function Editor() {
               </div>
             )}
 
-            {selectedElement && selectedElement.type === 'image' && (
-              <div className="flex items-center gap-3 bg-slate-50 dark:bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-850">
-                <span className="text-xs text-slate-400 font-semibold select-none">Firma / Imagen:</span>
-                <button
-                  onClick={deleteSelectedElement}
-                  className="flex items-center gap-1 text-xs text-red-500 hover:bg-red-500/10 px-2 py-1 rounded-md transition-colors"
-                  title="Eliminar elemento"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  Eliminar
-                </button>
-              </div>
-            )}
-
-            {/* Controles de Vista */}
+            {/* Zoom */}
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setZoom(Math.max(0.5, zoom - 0.1))}
@@ -746,11 +921,11 @@ export default function Editor() {
             </div>
           </div>
 
-          {/* CUERPO DE TRABAJO PRINCIPAL */}
+          {/* MAIN AREA */}
           <div className="flex flex-col lg:flex-row gap-6 items-start">
             
-            {/* BARRA LATERAL (Miniaturas y navegación rápida) */}
-            <div className="w-full lg:w-60 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 flex lg:flex-col gap-4 overflow-x-auto lg:overflow-x-visible lg:max-h-[600px] lg:overflow-y-auto">
+            {/* MINIATURAS PÁGINAS */}
+            <div className="w-full lg:w-60 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 flex lg:flex-col gap-4 overflow-x-auto lg:overflow-x-visible lg:max-h-[600px] lg:overflow-y-auto transition-colors">
               <div className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-1 hidden lg:block select-none">
                 PÁGINAS DEL DOCUMENTO
               </div>
@@ -765,7 +940,7 @@ export default function Editor() {
                     onClick={() => setCurrentPage(pageNum)}
                     className={`flex items-center justify-between p-2.5 rounded-xl border text-left transition-all min-w-[120px] lg:min-w-0 ${
                       isCurrent 
-                        ? 'border-emerald-500 bg-emerald-500/5 text-emerald-600 dark:text-emerald-450' 
+                        ? 'border-emerald-500 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400' 
                         : isDeleted
                         ? 'border-red-200 dark:border-red-950/20 bg-red-500/5 text-red-500 opacity-60'
                         : 'border-slate-100 dark:border-slate-850 hover:bg-slate-50 dark:hover:bg-slate-800'
@@ -781,11 +956,11 @@ export default function Editor() {
               })}
             </div>
 
-            {/* ESPACIO DE EDICIÓN DEL PDF */}
+            {/* ÁREA DEL PDF ACTIVO */}
             <div className="flex-grow flex flex-col items-center gap-4 w-full">
               
-              {/* Acciones de la Página Activa */}
-              <div className="w-full flex items-center justify-between bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-4 py-2.5 rounded-2xl shadow-sm">
+              {/* Controles superiores del canvas */}
+              <div className="w-full flex items-center justify-between bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-4 py-2.5 rounded-2xl shadow-sm transition-colors">
                 <div className="flex items-center gap-3">
                   <span className="text-sm font-bold text-slate-700 dark:text-slate-200">
                     Página {currentPage} de {numPages}
@@ -793,7 +968,7 @@ export default function Editor() {
                   {activePageDeleted && (
                     <span className="flex items-center gap-1 text-xs font-semibold text-red-500 bg-red-500/10 px-2 py-0.5 rounded-full border border-red-500/15 animate-pulse">
                       <ShieldAlert className="h-3 w-3" />
-                      Página eliminada del archivo final
+                      Excluida de la descarga
                     </span>
                   )}
                 </div>
@@ -810,15 +985,15 @@ export default function Editor() {
                     <>
                       <button
                         onClick={rotateActivePage}
-                        className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-250 dark:hover:bg-slate-750 text-slate-750 dark:text-slate-200 rounded-lg text-xs font-semibold transition-all"
-                        title="Rotar 90 grados a la derecha"
+                        className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-750 text-slate-755 dark:text-slate-200 rounded-lg text-xs font-semibold transition-all"
+                        title="Rotar 90 grados"
                       >
                         <RotateCw className="h-3.5 w-3.5" />
                         Rotar
                       </button>
                       <button
                         onClick={deleteActivePage}
-                        className="flex items-center gap-1 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-655 dark:text-red-400 rounded-lg text-xs font-semibold transition-all"
+                        className="flex items-center gap-1 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 rounded-lg text-xs font-semibold transition-all"
                         title="Eliminar página"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -829,15 +1004,15 @@ export default function Editor() {
                 </div>
               </div>
 
-              {/* CONTENEDOR INTERACTIVO DEL LIENZO */}
+              {/* CONTENEDOR DEL LIENZO */}
               <div 
-                className="relative overflow-auto border border-slate-200 dark:border-slate-800 rounded-3xl max-w-full bg-slate-150 dark:bg-slate-900/30 flex justify-center items-center p-4 min-h-[400px] w-full"
+                className="relative overflow-auto border border-slate-200 dark:border-slate-800 rounded-3xl max-w-full bg-slate-100 dark:bg-slate-900/30 flex justify-center items-center p-4 min-h-[400px] w-full transition-colors"
                 onClick={() => setSelectedElementId(null)}
               >
                 {activePageDeleted ? (
                   <div className="text-center p-8 max-w-md">
                     <ShieldAlert className="h-12 w-12 text-red-500 mx-auto mb-3" />
-                    <h4 className="font-bold text-slate-850 dark:text-white mb-1">Esta página ha sido excluida</h4>
+                    <h4 className="font-bold text-slate-800 dark:text-white mb-1">Esta página ha sido excluida</h4>
                     <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
                       No se incluirá en el archivo descargado. Puedes recuperarla en cualquier momento presionando el botón "Recuperar Página" superior.
                     </p>
@@ -856,11 +1031,11 @@ export default function Editor() {
                     {/* Lienzo del PDF */}
                     <canvas
                       ref={canvasRef}
-                      className="w-full h-full block rounded-xl pointer-events-none"
+                      className="w-full h-full block rounded-xl pointer-events-none bg-white"
                       style={{ width: '100%', height: '100%' }}
                     />
 
-                    {/* Capa de Edición Interactiva */}
+                    {/* Capa de Edición */}
                     <div className="absolute inset-0 z-10 pointer-events-none">
                       {pageElements.map((el) => {
                         const isSel = el.id === selectedElementId;
@@ -870,21 +1045,27 @@ export default function Editor() {
                             <div
                               key={el.id}
                               onPointerDown={(e) => handleElementPointerDown(e, el)}
+                              onDoubleClick={(e) => {
+                                e.stopPropagation();
+                                const newTxt = prompt('Editar texto:', el.text);
+                                if (newTxt !== null) updateSelectedText(newTxt);
+                              }}
                               className={`absolute cursor-move select-none pointer-events-auto px-2 py-1 rounded transition-all group ${
                                 isSel 
-                                  ? 'outline outline-2 outline-emerald-500 bg-white/70 dark:bg-slate-900/70 shadow-md' 
+                                  ? 'outline outline-2 outline-emerald-500 bg-white/80 dark:bg-slate-900/80 shadow-md' 
                                   : 'hover:bg-slate-500/10 hover:outline hover:outline-1 hover:outline-slate-400'
                               }`}
                               style={{
                                 left: `${el.x * 100}%`,
                                 top: `${el.y * 100}%`,
-                                fontSize: `${el.fontSize / 2}px`, // Ajustado a escala de pantalla (50% retina)
+                                fontSize: `${el.fontSize / 2}px`,
                                 color: el.color,
                                 fontFamily: 'Helvetica, Arial, sans-serif',
                                 fontWeight: 'normal',
                                 transform: 'translate(0, 0)',
                                 whiteSpace: 'nowrap'
                               }}
+                              title="Haz doble clic para editar el texto"
                             >
                               {el.text}
                             </div>
@@ -906,18 +1087,46 @@ export default function Editor() {
                                 height: `${el.height * 100}%`,
                               }}
                             >
-                              {/* Imagen de firma/imagen */}
                               <img 
                                 src={el.dataUrl} 
                                 alt="Firma o Imagen insertada" 
                                 className="w-full h-full object-contain pointer-events-none"
                               />
 
-                              {/* Control de redimensionamiento */}
                               {isSel && (
                                 <div
                                   onPointerDown={(e) => startResize(e, el)}
-                                  className="absolute bottom-[-5px] right-[-5px] w-3 h-3 bg-emerald-500 border border-white dark:border-slate-900 rounded-full cursor-se-resize z-20 pointer-events-auto"
+                                  className="absolute bottom-[-5px] right-[-5px] w-3.5 h-3.5 bg-emerald-500 border border-white dark:border-slate-900 rounded-full cursor-se-resize z-20 pointer-events-auto shadow-sm"
+                                  title="Arrastra para redimensionar"
+                                />
+                              )}
+                            </div>
+                          );
+                        } else if (el.type === 'shape') {
+                          return (
+                            <div
+                              key={el.id}
+                              onPointerDown={(e) => handleElementPointerDown(e, el)}
+                              className={`absolute cursor-move pointer-events-auto transition-all ${
+                                isSel 
+                                  ? 'outline outline-2 outline-emerald-500 shadow-md' 
+                                  : 'hover:outline hover:outline-1 hover:outline-slate-400'
+                              }`}
+                              style={{
+                                left: `${el.x * 100}%`,
+                                top: `${el.y * 100}%`,
+                                width: `${el.width * 100}%`,
+                                height: `${el.height * 100}%`,
+                                backgroundColor: el.color,
+                                border: el.borderWidth > 0 ? `${el.borderWidth / 2}px solid ${el.borderColor}` : 'none',
+                                borderRadius: el.shapeType === 'circle' ? '50%' : '0px',
+                                opacity: el.opacity,
+                              }}
+                            >
+                              {isSel && (
+                                <div
+                                  onPointerDown={(e) => startResize(e, el)}
+                                  className="absolute bottom-[-5px] right-[-5px] w-3.5 h-3.5 bg-emerald-500 border border-white dark:border-slate-900 rounded-full cursor-se-resize z-20 pointer-events-auto shadow-sm"
                                   title="Arrastra para redimensionar"
                                 />
                               )}
@@ -931,22 +1140,22 @@ export default function Editor() {
                 )}
               </div>
 
-              {/* Botones de navegación inferior */}
+              {/* Navegación de página */}
               <div className="flex items-center gap-4">
                 <button
                   onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
                   disabled={currentPage === 1}
-                  className="p-2 hover:bg-white dark:hover:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-700 dark:text-slate-200 disabled:opacity-40 transition-colors"
+                  className="p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-700 dark:text-slate-200 disabled:opacity-40 transition-all shadow-sm"
                 >
                   <ChevronLeft className="h-5 w-5" />
                 </button>
-                <span className="text-xs font-semibold text-slate-500 select-none">
+                <span className="text-xs font-bold text-slate-500 select-none">
                   {currentPage} / {numPages}
                 </span>
                 <button
                   onClick={() => setCurrentPage(Math.min(numPages, currentPage + 1))}
                   disabled={currentPage === numPages}
-                  className="p-2 hover:bg-white dark:hover:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-700 dark:text-slate-200 disabled:opacity-40 transition-colors"
+                  className="p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-700 dark:text-slate-200 disabled:opacity-40 transition-all shadow-sm"
                 >
                   <ChevronRight className="h-5 w-5" />
                 </button>
@@ -954,9 +1163,8 @@ export default function Editor() {
             </div>
           </div>
 
-          {/* ACCIONES FINALES E INFERIORES */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row justify-between items-center gap-4 mt-4">
-            
+          {/* BOTONES INFERIORES */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row justify-between items-center gap-4 mt-4 transition-colors">
             <button
               onClick={() => {
                 if (confirm('¿Estás seguro de que deseas salir y borrar los archivos? Esta acción es irreversible.')) {
