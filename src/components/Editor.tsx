@@ -1537,7 +1537,7 @@ export default function Editor() {
                                     if (e.key === 'Enter') handleConfirmTextEdit(el.id);
                                     if (e.key === 'Escape') handleCancelTextEdit();
                                   }}
-                                  className="absolute border border-emerald-500 bg-white dark:bg-slate-900 outline-none rounded shadow-md px-1.5 py-0.5 text-slate-900 dark:text-slate-100 pointer-events-auto z-40 font-sans"
+                                  className="absolute pointer-events-auto px-2 py-1 rounded outline outline-2 outline-emerald-500 bg-white/95 dark:bg-slate-900/95 shadow-md z-45 font-sans border-0 m-0 focus:outline-emerald-500 focus:ring-0"
                                   style={{
                                     left: `${el.x * 100}%`,
                                     top: `${el.y * 100}%`,
@@ -1546,8 +1546,9 @@ export default function Editor() {
                                     fontFamily: el.fontFamily === 'serif' ? 'Georgia, "Times New Roman", serif' : 'Helvetica, Arial, sans-serif',
                                     fontWeight: el.fontWeight || 'normal',
                                     fontStyle: el.fontStyle || 'normal',
-                                    width: `${Math.max(120, tempText.length * el.fontSize * (zoom / 3.5))}px`,
+                                    width: `${Math.max(120, tempText.length * el.fontSize * (zoom / 2) * 0.56 + 24)}px`,
                                     willChange: 'left, top',
+                                    lineHeight: 'normal',
                                   }}
                                 />
 
