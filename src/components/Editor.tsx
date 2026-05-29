@@ -276,7 +276,9 @@ export default function Editor() {
             
             const isBold = fontName.includes('bold') || fontName.includes('black') || fontName.includes('heavy') || fontName.includes('w700') || fontName.includes('w800') || fontName.includes('w900') || fontName.includes('w600');
             const isItalic = fontName.includes('italic') || fontName.includes('oblique') || fontName.includes('obli');
-            const isSerif = fontName.includes('times') || fontName.includes('serif') || fontName.includes('roman') || fontName.includes('georgia') || fontName.includes('cambria') || fontName.includes('garamond');
+            
+            // CORRECCIÓN: "sans-serif".includes("serif") es true, debemos descartarlo usando !includes('sans')
+            const isSerif = (fontName.includes('serif') && !fontName.includes('sans')) || fontName.includes('times') || fontName.includes('roman') || fontName.includes('georgia') || fontName.includes('cambria') || fontName.includes('garamond');
             
             return {
               id: `orig-${currentPage}-${idx}`,
@@ -692,7 +694,6 @@ export default function Editor() {
         }
         return el;
       });
-      // Registrar en el historial solo si se ha movido
       const orig = pageElements.find(item => item.id === selectedElementId);
       if (orig && (orig.x !== elementCoordsRef.current.x || orig.y !== elementCoordsRef.current.y)) {
         pushToHistory({ ...elements, [currentPage]: updated });
@@ -990,7 +991,7 @@ export default function Editor() {
   const selectedElement = pageElements.find((el) => el.id === selectedElementId);
 
   return (
-    <div className="w-full flex flex-col gap-6 text-slate-900 dark:text-slate-100">
+    <div className="w-full flex flex-col gap-6 text-slate-900 dark:text-slate-100 font-sans">
       
       {loadingMsg && (
         <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-md z-[110] flex flex-col items-center justify-center text-center px-4">
@@ -1127,7 +1128,7 @@ export default function Editor() {
               <button
                 onClick={handleUndo}
                 disabled={history.length === 0}
-                className="flex items-center gap-1.5 px-3 py-2 bg-slate-150 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-semibold transition-all disabled:opacity-40"
+                className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-semibold transition-all disabled:opacity-40 border border-slate-200 dark:border-slate-800 shadow-sm"
                 title="Deshacer última acción"
               >
                 <Undo className="h-4 w-4" />
@@ -1153,7 +1154,7 @@ export default function Editor() {
                       onChange={(e) => updateSelectedFontSize(Number(e.target.value))}
                       className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-800 dark:text-slate-200"
                     >
-                      {[6, 8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 40, 48, 56, 72].map((s) => (
+                      {[6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 40, 48, 56, 72].map((s) => (
                         <option key={s} value={s}>{s}px</option>
                       ))}
                     </select>
@@ -1165,7 +1166,7 @@ export default function Editor() {
                         className={`p-1.5 rounded-lg text-xs font-bold w-7 h-7 flex items-center justify-center transition-all ${
                           selectedElement.fontWeight === 'bold'
                             ? 'bg-emerald-500 text-white shadow-sm'
-                            : 'bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-850 text-slate-800 dark:text-slate-250'
+                            : 'bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-850 text-slate-800 dark:text-slate-250 border border-slate-200 dark:border-slate-800'
                         }`}
                         title="Negrita"
                       >
@@ -1177,7 +1178,7 @@ export default function Editor() {
                         className={`p-1.5 rounded-lg text-xs italic font-semibold w-7 h-7 flex items-center justify-center transition-all ${
                           selectedElement.fontStyle === 'italic'
                             ? 'bg-emerald-500 text-white shadow-sm'
-                            : 'bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-850 text-slate-800 dark:text-slate-250'
+                            : 'bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-850 text-slate-800 dark:text-slate-250 border border-slate-200 dark:border-slate-800'
                         }`}
                         title="Cursiva"
                       >
@@ -1187,7 +1188,7 @@ export default function Editor() {
                       <select
                         value={selectedElement.fontFamily || 'sans-serif'}
                         onChange={(e) => updateSelectedFontFamily(e.target.value as 'sans-serif' | 'serif')}
-                        className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-800 dark:text-slate-200"
+                        className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-800 dark:text-slate-205"
                       >
                         <option value="sans-serif">Sans-Serif</option>
                         <option value="serif">Serif (Times)</option>
@@ -1277,7 +1278,7 @@ export default function Editor() {
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setZoom(Math.max(0.2, Number((zoom - 0.2).toFixed(1))))}
-                className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-600 dark:text-slate-350 transition-colors"
+                className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-600 dark:text-slate-350 transition-colors border border-slate-200 dark:border-slate-800 shadow-sm bg-white dark:bg-slate-900"
                 title="Alejar Zoom"
               >
                 <ZoomOut className="h-4 w-4" />
@@ -1287,7 +1288,7 @@ export default function Editor() {
               </span>
               <button
                 onClick={() => setZoom(Math.min(10.0, Number((zoom + 0.2).toFixed(1))))}
-                className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-600 dark:text-slate-350 transition-colors"
+                className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-600 dark:text-slate-350 transition-colors border border-slate-200 dark:border-slate-800 shadow-sm bg-white dark:bg-slate-900"
                 title="Acercar Zoom (Hasta 1000%)"
               >
                 <ZoomIn className="h-4 w-4" />
@@ -1299,8 +1300,8 @@ export default function Editor() {
           <div className="flex flex-col lg:flex-row gap-6 items-start">
             
             {/* MINIATURAS */}
-            <div className="w-full lg:w-60 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 flex lg:flex-col gap-4 overflow-x-auto lg:overflow-x-visible lg:max-h-[600px] lg:overflow-y-auto transition-colors">
-              <div className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-1 hidden lg:block select-none">
+            <div className="w-full lg:w-60 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 flex lg:flex-col gap-4 overflow-x-auto lg:overflow-x-visible lg:max-h-[600px] lg:overflow-y-auto transition-colors shadow-sm">
+              <div className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-1 hidden lg:block select-none font-mono">
                 PÁGINAS DEL DOCUMENTO
               </div>
               {Array.from({ length: numPages }).map((_, index) => {
@@ -1314,7 +1315,7 @@ export default function Editor() {
                     onClick={() => setCurrentPage(pageNum)}
                     className={`flex items-center justify-between p-2.5 rounded-xl border text-left transition-all min-w-[120px] lg:min-w-0 ${
                       isCurrent 
-                        ? 'border-emerald-500 bg-emerald-500/5 text-emerald-600 dark:text-emerald-405' 
+                        ? 'border-emerald-500 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400' 
                         : isDeleted
                         ? 'border-red-200 dark:border-red-950/20 bg-red-500/5 text-red-500 opacity-60'
                         : 'border-slate-100 dark:border-slate-850 hover:bg-slate-50 dark:hover:bg-slate-800'
@@ -1358,7 +1359,7 @@ export default function Editor() {
                     <>
                       <button
                         onClick={rotateActivePage}
-                        className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-750 text-slate-750 dark:text-slate-200 rounded-lg text-xs font-semibold transition-all"
+                        className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-205 dark:hover:bg-slate-750 text-slate-750 dark:text-slate-200 rounded-lg text-xs font-semibold transition-all"
                         title="Rotar página 90 grados"
                       >
                         <RotateCw className="h-3.5 w-3.5" />
@@ -1366,7 +1367,7 @@ export default function Editor() {
                       </button>
                       <button
                         onClick={deleteActivePage}
-                        className="flex items-center gap-1 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-655 dark:text-red-400 rounded-lg text-xs font-semibold transition-all"
+                        className="flex items-center gap-1 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 rounded-lg text-xs font-semibold transition-all"
                         title="Eliminar página"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -1381,7 +1382,6 @@ export default function Editor() {
               <div 
                 className="relative overflow-auto border border-slate-200 dark:border-slate-800 rounded-3xl max-w-full bg-slate-100 dark:bg-slate-900/30 flex justify-center items-center p-4 min-h-[400px] w-full transition-colors"
                 onClick={(e) => {
-                  // Deseleccionar elemento únicamente si se hace clic en el fondo vacío o en el CANVAS
                   if (e.target === e.currentTarget || (e.target as HTMLElement).tagName === 'CANVAS') {
                     setSelectedElementId(null);
                   }
@@ -1435,7 +1435,7 @@ export default function Editor() {
                             }}
                             title="Haz clic para modificar este texto original preservando el formato"
                           >
-                            <div className="absolute top-[-16px] left-0 bg-emerald-600 text-white text-[8px] px-1 py-0.2 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none select-none">
+                            <div className="absolute top-[-16px] left-0 bg-emerald-600 text-white text-[8px] px-1 py-0.2 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none select-none z-30">
                               Modificar texto (conservando formato)
                             </div>
                           </div>
@@ -1460,13 +1460,13 @@ export default function Editor() {
                               }}
                               className={`absolute cursor-move select-none pointer-events-auto px-2 py-1 rounded transition-all group ${
                                 isSel 
-                                  ? 'outline outline-2 outline-emerald-500 bg-white/90 dark:bg-slate-900/90 shadow-md z-30' 
+                                  ? 'outline outline-2 outline-emerald-500 bg-white/95 dark:bg-slate-900/95 shadow-md z-30' 
                                   : 'hover:bg-slate-500/10 hover:outline hover:outline-1 hover:outline-slate-400'
                               }`}
                               style={{
                                 left: `${el.x * 100}%`,
                                 top: `${el.y * 100}%`,
-                                fontSize: `${el.fontSize / 2}px`,
+                                fontSize: `${el.fontSize * (zoom / 2)}px`, // CORRECCIÓN: Escalado de fuente dinámico según el zoom de pantalla
                                 color: el.color,
                                 fontFamily: el.fontFamily === 'serif' ? 'Georgia, "Times New Roman", serif' : 'Helvetica, Arial, sans-serif',
                                 fontWeight: el.fontWeight || 'normal',
@@ -1583,7 +1583,7 @@ export default function Editor() {
           </div>
 
           {/* BOTONES INFERIORES */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row justify-between items-center gap-4 mt-4 transition-colors">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row justify-between items-center gap-4 mt-4 transition-colors shadow-sm">
             <button
               onClick={() => {
                 if (confirm('¿Estás seguro de que deseas salir y borrar los archivos? Esta acción es irreversible.')) {
