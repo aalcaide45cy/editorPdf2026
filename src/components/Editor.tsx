@@ -682,7 +682,7 @@ export default function Editor() {
       type: 'text',
       text: item.text,
       x: item.x,
-      y: item.y + 0.002,
+      y: item.y,
       fontSize: item.fontSize,
       color: detectedTextColor, 
       fontWeight: item.fontWeight,
@@ -1381,65 +1381,69 @@ export default function Editor() {
                   className="bg-white dark:bg-slate-900 text-xs px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 w-44 outline-none text-slate-850 dark:text-slate-200 font-medium"
                 />
                 
-                <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
+                {!selectedElement.originalTextId && (
+                  <>
+                    <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
 
-                <span className="text-[10px] text-slate-400 font-semibold select-none">Tamaño:</span>
-                <select
-                  value={selectedElement.fontSize}
-                  onChange={(e) => updateSelectedFontSize(Number(e.target.value))}
-                  className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
-                >
-                  {Array.from(new Set([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 40, 48, 56, 72, Math.round(selectedElement.fontSize)]))
-                    .sort((a, b) => a - b)
-                    .map((s) => (
-                      <option key={s} value={s}>{s}px</option>
-                    ))
-                  }
-                </select>
+                    <span className="text-[10px] text-slate-400 font-semibold select-none">Tamaño:</span>
+                    <select
+                      value={selectedElement.fontSize}
+                      onChange={(e) => updateSelectedFontSize(Number(e.target.value))}
+                      className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
+                    >
+                      {Array.from(new Set([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 40, 48, 56, 72, Math.round(selectedElement.fontSize)]))
+                        .sort((a, b) => a - b)
+                        .map((s) => (
+                          <option key={s} value={s}>{s}px</option>
+                        ))
+                      }
+                    </select>
 
-                <button
-                  onClick={toggleSelectedBold}
-                  className={`w-7 h-7 flex items-center justify-center rounded-lg font-bold text-xs ${
-                    selectedElement.fontWeight === 'bold'
-                      ? 'bg-emerald-500 text-white shadow-sm'
-                      : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
-                  }`}
-                  title="Negrita"
-                >
-                  N
-                </button>
+                    <button
+                      onClick={toggleSelectedBold}
+                      className={`w-7 h-7 flex items-center justify-center rounded-lg font-bold text-xs ${
+                        selectedElement.fontWeight === 'bold'
+                          ? 'bg-emerald-500 text-white shadow-sm'
+                          : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                      }`}
+                      title="Negrita"
+                    >
+                      N
+                    </button>
 
-                <button
-                  onClick={toggleSelectedItalic}
-                  className={`w-7 h-7 flex items-center justify-center rounded-lg italic text-xs ${
-                    selectedElement.fontStyle === 'italic'
-                      ? 'bg-emerald-500 text-white shadow-sm'
-                      : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
-                  }`}
-                  title="Cursiva"
-                >
-                  K
-                </button>
+                    <button
+                      onClick={toggleSelectedItalic}
+                      className={`w-7 h-7 flex items-center justify-center rounded-lg italic text-xs ${
+                        selectedElement.fontStyle === 'italic'
+                          ? 'bg-emerald-500 text-white shadow-sm'
+                          : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                      }`}
+                      title="Cursiva"
+                    >
+                      K
+                    </button>
 
-                <select
-                  value={selectedElement.fontFamily || 'sans-serif'}
-                  onChange={(e) => updateSelectedFontFamily(e.target.value as 'sans-serif' | 'serif')}
-                  className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
-                >
-                  <option value="sans-serif">Sans-Serif</option>
-                  <option value="serif">Serif (Times)</option>
-                </select>
+                    <select
+                      value={selectedElement.fontFamily || 'sans-serif'}
+                      onChange={(e) => updateSelectedFontFamily(e.target.value as 'sans-serif' | 'serif')}
+                      className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
+                    >
+                      <option value="sans-serif">Sans-Serif</option>
+                      <option value="serif">Serif (Times)</option>
+                    </select>
 
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] text-slate-400 font-semibold select-none">Color:</span>
-                  <input
-                    type="color"
-                    value={selectedElement.color}
-                    onChange={(e) => updateSelectedColor(e.target.value)}
-                    className="w-7 h-7 p-0.5 rounded-lg cursor-pointer border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
-                    title="Color del texto"
-                  />
-                </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-slate-400 font-semibold select-none">Color:</span>
+                      <input
+                        type="color"
+                        value={selectedElement.color}
+                        onChange={(e) => updateSelectedColor(e.target.value)}
+                        className="w-7 h-7 p-0.5 rounded-lg cursor-pointer border border-slate-250 dark:border-slate-800 bg-white dark:bg-slate-900"
+                        title="Color del texto"
+                      />
+                    </div>
+                  </>
+                )}
 
                 <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
 
@@ -1787,7 +1791,7 @@ export default function Editor() {
                                     if (e.key === 'Enter') handleConfirmTextEdit(el.id);
                                     if (e.key === 'Escape') handleCancelTextEdit();
                                   }}
-                                  className="absolute pointer-events-auto px-2 py-1 rounded outline outline-2 outline-emerald-500 bg-white/95 dark:bg-slate-900/95 shadow-md z-45 font-sans border-0 m-0 focus:outline-emerald-500 focus:ring-0"
+                                  className="absolute pointer-events-auto px-2 py-1 rounded outline outline-2 outline-emerald-500 bg-transparent z-45 font-sans border-0 m-0 focus:outline-emerald-500 focus:ring-0"
                                   style={{
                                     left: `${el.x * 100}%`,
                                     top: `${el.y * 100}%`,
@@ -1816,60 +1820,62 @@ export default function Editor() {
                                   onPointerUp={(e) => e.stopPropagation()}
                                 >
                                   {/* Formato y Color */}
-                                  <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 dark:border-slate-800 pb-2">
-                                    <select
-                                      value={el.fontSize}
-                                      onChange={(e) => updateSelectedFontSize(Number(e.target.value))}
-                                      className="bg-slate-50 dark:bg-slate-950 text-xs px-2 py-1 rounded border border-slate-200 dark:border-slate-800 outline-none text-slate-800 dark:text-slate-200"
-                                    >
-                                      {Array.from(new Set([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 40, 48, 56, 72, Math.round(el.fontSize)]))
-                                        .sort((a, b) => a - b)
-                                        .map((s) => (
-                                          <option key={s} value={s}>{s}px</option>
-                                        ))
-                                      }
-                                    </select>
+                                  {!el.originalTextId && (
+                                    <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 dark:border-slate-800 pb-2">
+                                      <select
+                                        value={el.fontSize}
+                                        onChange={(e) => updateSelectedFontSize(Number(e.target.value))}
+                                        className="bg-slate-50 dark:bg-slate-950 text-xs px-2 py-1 rounded border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
+                                      >
+                                        {Array.from(new Set([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 40, 48, 56, 72, Math.round(el.fontSize)]))
+                                          .sort((a, b) => a - b)
+                                          .map((s) => (
+                                            <option key={s} value={s}>{s}px</option>
+                                          ))
+                                        }
+                                      </select>
 
-                                    <button
-                                      onClick={toggleSelectedBold}
-                                      className={`w-7 h-7 flex items-center justify-center rounded font-bold text-xs ${
-                                        el.fontWeight === 'bold'
-                                          ? 'bg-emerald-500 text-white shadow-sm'
-                                          : 'bg-slate-100 dark:bg-slate-950 text-slate-800 dark:text-slate-200'
-                                      }`}
-                                    >
-                                      N
-                                    </button>
+                                      <button
+                                        onClick={toggleSelectedBold}
+                                        className={`w-7 h-7 flex items-center justify-center rounded font-bold text-xs ${
+                                          el.fontWeight === 'bold'
+                                            ? 'bg-emerald-500 text-white shadow-sm'
+                                            : 'bg-slate-100 dark:bg-slate-950 text-slate-800 dark:text-slate-200'
+                                        }`}
+                                      >
+                                        N
+                                      </button>
 
-                                    <button
-                                      onClick={toggleSelectedItalic}
-                                      className={`w-7 h-7 flex items-center justify-center rounded italic text-xs ${
-                                        el.fontStyle === 'italic'
-                                          ? 'bg-emerald-500 text-white shadow-sm'
-                                          : 'bg-slate-100 dark:bg-slate-950 text-slate-800 dark:text-slate-200'
-                                      }`}
-                                    >
-                                      K
-                                    </button>
+                                      <button
+                                        onClick={toggleSelectedItalic}
+                                        className={`w-7 h-7 flex items-center justify-center rounded italic text-xs ${
+                                          el.fontStyle === 'italic'
+                                            ? 'bg-emerald-500 text-white shadow-sm'
+                                            : 'bg-slate-100 dark:bg-slate-950 text-slate-800 dark:text-slate-200'
+                                        }`}
+                                      >
+                                        K
+                                      </button>
 
-                                    <select
-                                      value={el.fontFamily || 'sans-serif'}
-                                      onChange={(e) => updateSelectedFontFamily(e.target.value as 'sans-serif' | 'serif')}
-                                      className="bg-slate-50 dark:bg-slate-950 text-xs px-2 py-1 rounded border border-slate-200 dark:border-slate-800 outline-none text-slate-800 dark:text-slate-200"
-                                    >
-                                      <option value="sans-serif">Sans-Serif</option>
-                                      <option value="serif">Serif (Times)</option>
-                                    </select>
+                                      <select
+                                        value={el.fontFamily || 'sans-serif'}
+                                        onChange={(e) => updateSelectedFontFamily(e.target.value as 'sans-serif' | 'serif')}
+                                        className="bg-slate-50 dark:bg-slate-950 text-xs px-2 py-1 rounded border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
+                                      >
+                                        <option value="sans-serif">Sans-Serif</option>
+                                        <option value="serif">Serif (Times)</option>
+                                      </select>
 
-                                    {/* Selector de Color directo en el popup */}
-                                    <input
-                                      type="color"
-                                      value={el.color}
-                                      onChange={(e) => updateSelectedColor(e.target.value)}
-                                      className="w-7 h-7 p-0.5 rounded cursor-pointer border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950"
-                                      title="Cambiar color del texto"
-                                    />
-                                  </div>
+                                      {/* Selector de Color directo en el popup */}
+                                      <input
+                                        type="color"
+                                        value={el.color}
+                                        onChange={(e) => updateSelectedColor(e.target.value)}
+                                        className="w-7 h-7 p-0.5 rounded cursor-pointer border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950"
+                                        title="Cambiar color del texto"
+                                      />
+                                    </div>
+                                  )}
 
                                   {/* Acciones */}
                                   <div className="flex justify-between items-center text-xs">
@@ -1911,7 +1917,7 @@ export default function Editor() {
                               }}
                               className={`absolute cursor-move select-none pointer-events-auto px-2 py-1 rounded transition-[outline,background-color] group ${
                                 isSel 
-                                  ? 'outline outline-2 outline-emerald-500 bg-white/90 dark:bg-slate-900/90 shadow-md z-30 font-sans' 
+                                  ? 'outline outline-2 outline-emerald-500 bg-transparent z-30 font-sans' 
                                   : 'hover:bg-slate-500/10 hover:outline hover:outline-1 hover:outline-slate-400'
                               }`}
                               style={{
