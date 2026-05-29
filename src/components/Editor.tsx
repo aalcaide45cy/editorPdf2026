@@ -35,6 +35,9 @@ interface TextElement {
   y: number;
   fontSize: number;
   color: string;
+  fontWeight?: 'bold' | 'normal';
+  fontStyle?: 'italic' | 'normal';
+  fontFamily?: 'sans-serif' | 'serif';
 }
 
 interface ImageElement {
@@ -66,12 +69,91 @@ type EditorElement = TextElement | ImageElement | ShapeElement;
 interface OriginalTextItem {
   id: string;
   text: string;
-  x: number; // Coordenada relativa (0..1)
-  y: number; // Coordenada relativa (0..1)
-  width: number; // Ancho relativo (0..1)
-  height: number; // Alto relativo (0..1)
+  x: number;
+  y: number;
+  width: number;
+  height: number;
   fontSize: number;
+  fontWeight: 'bold' | 'normal';
+  fontStyle: 'italic' | 'normal';
+  fontFamily: 'sans-serif' | 'serif';
 }
+
+// Analizar colores de texto y fondo leyendo píxeles del canvas
+const detectTextAndBgColor = (
+  canvas: HTMLCanvasElement,
+  x: number,
+  y: number,
+  width: number,
+  height: number
+) => {
+  try {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return { textColor: '#000000', bgColor: '#ffffff' };
+
+    // Convertir de coordenadas relativas a píxeles físicos del lienzo
+    const pxX = Math.round(x * canvas.width);
+    const pxY = Math.round(y * canvas.height);
+    const pxW = Math.round(width * canvas.width);
+    const pxH = Math.round(height * canvas.height);
+
+    if (pxW <= 0 || pxH <= 0) return { textColor: '#000000', bgColor: '#ffffff' };
+
+    const imgData = ctx.getImageData(pxX, pxY, pxW, pxH);
+    const data = imgData.data;
+
+    // Muestrear las esquinas para determinar el color de fondo aproximado
+    const corners = [
+      0, // superior izquierda
+      Math.min(data.length - 4, (pxW - 1) * 4), // superior derecha
+      Math.min(data.length - 4, (pxH - 1) * pxW * 4), // inferior izquierda
+      data.length - 4 // inferior derecha
+    ];
+
+    const bgR = Math.round(corners.reduce((sum, idx) => sum + data[idx], 0) / 4);
+    const bgG = Math.round(corners.reduce((sum, idx) => sum + data[idx + 1], 0) / 4);
+    const bgB = Math.round(corners.reduce((sum, idx) => sum + data[idx + 2], 0) / 4);
+
+    const toHex = (c: number) => c.toString(16).padStart(2, '0');
+    const bgColor = `#${toHex(bgR)}${toHex(bgG)}${toHex(bgB)}`;
+
+    // Buscar píxeles que difieran del fondo para obtener el color de letra
+    let rSum = 0, gSum = 0, bSum = 0, count = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const a = data[i + 3];
+
+      if (a < 50) continue; // ignorar transparentes
+
+      const diff = Math.abs(r - bgR) + Math.abs(g - bgG) + Math.abs(b - bgB);
+      if (diff > 50) { // Umbral de contraste
+        rSum += r;
+        gSum += g;
+        bSum += b;
+        count++;
+      }
+    }
+
+    let textColor = '#000000';
+    if (count > 0) {
+      const rAvg = Math.round(rSum / count);
+      const gAvg = Math.round(gSum / count);
+      const bAvg = Math.round(bSum / count);
+      textColor = `#${toHex(rAvg)}${toHex(gAvg)}${toHex(bAvg)}`;
+    } else {
+      // Si no hay contraste detectado, usar el color inverso al brillo
+      const brightness = (bgR * 299 + bgG * 587 + bgB * 114) / 1000;
+      textColor = brightness > 125 ? '#000000' : '#ffffff';
+    }
+
+    return { textColor, bgColor };
+  } catch (err) {
+    console.error('Error al detectar colores del canvas:', err);
+    return { textColor: '#000000', bgColor: '#ffffff' };
+  }
+};
 
 export default function Editor() {
   // Document states
@@ -160,23 +242,30 @@ export default function Editor() {
             const tx = matrix[4];
             const ty = matrix[5];
             
-            // Convertir coordenadas de línea de base nativas del PDF al viewport
             const [x, y] = viewport.convertToViewportPoint(tx, ty);
             
-            // La altura de la fuente se estima a partir de la matriz de transformación
             const fontSize = Math.abs(matrix[3]) || 12;
             
             const itemWidth = item.width * viewport.scale;
             const itemHeight = fontSize * viewport.scale;
+
+            // Extraer y normalizar estilos tipográficos a partir del nombre de la fuente
+            const fontName = (item.fontName || '').toLowerCase();
+            const isBold = fontName.includes('bold') || fontName.includes('black') || fontName.includes('heavy') || fontName.includes('w700') || fontName.includes('w800') || fontName.includes('w900') || fontName.includes('w600');
+            const isItalic = fontName.includes('italic') || fontName.includes('oblique') || fontName.includes('obli');
+            const isSerif = fontName.includes('times') || fontName.includes('serif') || fontName.includes('roman') || fontName.includes('georgia') || fontName.includes('minion');
             
             return {
               id: `orig-${currentPage}-${idx}`,
               text: item.str,
               x: x / viewport.width,
-              y: (y - itemHeight) / viewport.height, // Ajustar Y desde la línea de base
+              y: (y - itemHeight) / viewport.height,
               width: itemWidth / viewport.width,
               height: itemHeight / viewport.height,
               fontSize: fontSize,
+              fontWeight: isBold ? 'bold' : 'normal',
+              fontStyle: isItalic ? 'italic' : 'normal',
+              fontFamily: isSerif ? 'serif' : 'sans-serif',
             };
           });
         
@@ -221,7 +310,6 @@ export default function Editor() {
 
       await page.render(renderContext).promise;
       
-      // Guardar el tamaño final calculado del viewport (escala de visualización a la mitad de retina)
       setCanvasSize({ width: viewport.width / 2, height: viewport.height / 2 });
     } catch (error) {
       console.error('Error rendering page:', error);
@@ -335,6 +423,9 @@ export default function Editor() {
       y: 0.1,
       fontSize: 16,
       color: '#000000',
+      fontWeight: 'normal',
+      fontStyle: 'normal',
+      fontFamily: 'sans-serif'
     };
     const pageElements = elements[currentPage] || [];
     setElements({
@@ -372,9 +463,9 @@ export default function Editor() {
       y: 0.3,
       width: 0.2,
       height: 0.15,
-      color: '#ffffff', // relleno blanco para actuar de borrador
+      color: '#ffffff', 
       borderColor: '#000000',
-      borderWidth: 0, // sin borde por defecto
+      borderWidth: 0, 
       opacity: 1.0,
     };
     const pageElements = elements[currentPage] || [];
@@ -412,35 +503,53 @@ export default function Editor() {
     }
   };
 
-  // Simular la edición del texto original
+  // Simular la edición del texto original con preservación de formato completo
   const handleEditOriginalText = (item: OriginalTextItem) => {
-    // 1. Añadir un borrador blanco (whiteout shape) en la misma posición
+    let detectedTextColor = '#000000';
+    let detectedBgColor = '#ffffff';
+
+    // Muestrear los colores del canvas en tiempo real
+    if (canvasRef.current) {
+      const colors = detectTextAndBgColor(
+        canvasRef.current,
+        item.x,
+        item.y,
+        item.width,
+        item.height
+      );
+      detectedTextColor = colors.textColor;
+      detectedBgColor = colors.bgColor;
+    }
+
+    // 1. Añadir el parche ocultador del color de fondo exacto
     const whiteoutId = `whiteout-${Date.now()}`;
     const whiteoutShape: ShapeElement = {
       id: whiteoutId,
       type: 'shape',
       shapeType: 'rect',
-      // Añadir pequeños márgenes para cubrir completamente
-      x: item.x - 0.003,
-      y: item.y - 0.003,
-      width: item.width + 0.006,
-      height: item.height + 0.006,
-      color: '#ffffff', // Fondo blanco para ocultar el texto original
-      borderColor: '#ffffff',
+      x: item.x - 0.004,
+      y: item.y - 0.004,
+      width: item.width + 0.008,
+      height: item.height + 0.008,
+      color: detectedBgColor, 
+      borderColor: detectedBgColor,
       borderWidth: 0,
       opacity: 1.0,
     };
 
-    // 2. Añadir el cuadro de texto editable justo encima
+    // 2. Añadir el texto editable con sus estilos y color detectados
     const textId = `text-edit-${Date.now()}`;
     const editableText: TextElement = {
       id: textId,
       type: 'text',
       text: item.text,
       x: item.x,
-      y: item.y + 0.002, // Margen mínimo de alineación
+      y: item.y + 0.002,
       fontSize: item.fontSize,
-      color: '#000000',
+      color: detectedTextColor, 
+      fontWeight: item.fontWeight,
+      fontStyle: item.fontStyle,
+      fontFamily: item.fontFamily,
     };
 
     const pageElements = elements[currentPage] || [];
@@ -449,12 +558,10 @@ export default function Editor() {
       [currentPage]: [...pageElements, whiteoutShape, editableText],
     });
 
-    // Ocultar este texto original en la capa interactiva local
     const newHidden = new Set(hiddenOriginalTextIds);
     newHidden.add(item.id);
     setHiddenOriginalTextIds(newHidden);
 
-    // Seleccionar el nuevo texto editable inmediatamente
     setSelectedElementId(textId);
   };
 
@@ -524,7 +631,6 @@ export default function Editor() {
       
       elementCoordsRef.current = { x: newX, y: newY };
       
-      // Modificar directamente los estilos CSS (GPU-accelerated / Zero Lag)
       dragTargetRef.current.style.left = `${newX * 100}%`;
       dragTargetRef.current.style.top = `${newY * 100}%`;
       
@@ -555,7 +661,6 @@ export default function Editor() {
     }
 
     if (isDraggingRef.current && selectedElementId) {
-      // Sincronizar en el estado de React solo al soltar el ratón
       const pageElements = elements[currentPage] || [];
       const updated = pageElements.map((el) => {
         if (el.id === selectedElementId) {
@@ -608,6 +713,41 @@ export default function Editor() {
     const updated = pageElements.map((el) => {
       if (el.id === selectedElementId) {
         return { ...el, color } as any;
+      }
+      return el;
+    });
+    setElements({ ...elements, [currentPage]: updated });
+  };
+
+  const toggleSelectedBold = () => {
+    const pageElements = elements[currentPage] || [];
+    const updated = pageElements.map((el) => {
+      if (el.id === selectedElementId && el.type === 'text') {
+        const next = el.fontWeight === 'bold' ? 'normal' : 'bold';
+        return { ...el, fontWeight: next } as TextElement;
+      }
+      return el;
+    });
+    setElements({ ...elements, [currentPage]: updated });
+  };
+
+  const toggleSelectedItalic = () => {
+    const pageElements = elements[currentPage] || [];
+    const updated = pageElements.map((el) => {
+      if (el.id === selectedElementId && el.type === 'text') {
+        const next = el.fontStyle === 'italic' ? 'normal' : 'italic';
+        return { ...el, fontStyle: next } as TextElement;
+      }
+      return el;
+    });
+    setElements({ ...elements, [currentPage]: updated });
+  };
+
+  const updateSelectedFontFamily = (family: 'sans-serif' | 'serif') => {
+    const pageElements = elements[currentPage] || [];
+    const updated = pageElements.map((el) => {
+      if (el.id === selectedElementId && el.type === 'text') {
+        return { ...el, fontFamily: family } as TextElement;
       }
       return el;
     });
@@ -688,7 +828,33 @@ export default function Editor() {
           
           for (const el of pageElements) {
             if (el.type === 'text') {
-              const helveticaFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
+              // Mapear la tipografía correcta con estilo en pdf-lib
+              let selectedFont = StandardFonts.Helvetica;
+              const isSerif = el.fontFamily === 'serif';
+              
+              if (isSerif) {
+                if (el.fontWeight === 'bold' && el.fontStyle === 'italic') {
+                  selectedFont = StandardFonts.TimesRomanBoldItalic;
+                } else if (el.fontWeight === 'bold') {
+                  selectedFont = StandardFonts.TimesRomanBold;
+                } else if (el.fontStyle === 'italic') {
+                  selectedFont = StandardFonts.TimesRomanItalic;
+                } else {
+                  selectedFont = StandardFonts.TimesRoman;
+                }
+              } else {
+                if (el.fontWeight === 'bold' && el.fontStyle === 'italic') {
+                  selectedFont = StandardFonts.HelveticaBoldOblique;
+                } else if (el.fontWeight === 'bold') {
+                  selectedFont = StandardFonts.HelveticaBold;
+                } else if (el.fontStyle === 'italic') {
+                  selectedFont = StandardFonts.HelveticaOblique;
+                } else {
+                  selectedFont = StandardFonts.Helvetica;
+                }
+              }
+
+              const embeddedFont = await pdfDoc.embedFont(selectedFont);
               const elPdfX = el.x * width;
               const elPdfY = height - (el.y * height) - (el.fontSize * 0.95);
 
@@ -696,7 +862,7 @@ export default function Editor() {
                 x: elPdfX,
                 y: elPdfY,
                 size: el.fontSize,
-                font: helveticaFont,
+                font: embeddedFont,
                 color: hexToRgb(el.color),
               });
             } else if (el.type === 'image') {
@@ -913,7 +1079,6 @@ export default function Editor() {
 
               <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1" />
 
-              {/* Botón para Editar Texto Original */}
               <button
                 onClick={() => setIsEditTextMode(!isEditTextMode)}
                 disabled={activePageDeleted || originalTextItems.length === 0}
@@ -939,7 +1104,7 @@ export default function Editor() {
                       type="text"
                       value={selectedElement.text}
                       onChange={(e) => updateSelectedText(e.target.value)}
-                      className="bg-white dark:bg-slate-900 text-xs px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 w-44 outline-none text-slate-800 dark:text-slate-200"
+                      className="bg-white dark:bg-slate-900 text-xs px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 w-44 outline-none text-slate-800 dark:text-slate-200 font-medium"
                     />
                     
                     <select
@@ -951,6 +1116,45 @@ export default function Editor() {
                         <option key={s} value={s}>{s}px</option>
                       ))}
                     </select>
+
+                    {/* Controles de Estilos Tipográficos */}
+                    <div className="flex items-center gap-1.5 border-l border-r border-slate-200 dark:border-slate-800 px-2.5 py-0.5">
+                      {/* Negrita */}
+                      <button
+                        onClick={toggleSelectedBold}
+                        className={`p-1.5 rounded-lg text-xs font-bold w-7 h-7 flex items-center justify-center transition-all ${
+                          selectedElement.fontWeight === 'bold'
+                            ? 'bg-emerald-500 text-white shadow-sm'
+                            : 'bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-850 text-slate-800 dark:text-slate-250'
+                        }`}
+                        title="Negrita"
+                      >
+                        N
+                      </button>
+
+                      {/* Cursiva */}
+                      <button
+                        onClick={toggleSelectedItalic}
+                        className={`p-1.5 rounded-lg text-xs italic font-semibold w-7 h-7 flex items-center justify-center transition-all ${
+                          selectedElement.fontStyle === 'italic'
+                            ? 'bg-emerald-500 text-white shadow-sm'
+                            : 'bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-850 text-slate-800 dark:text-slate-250'
+                        }`}
+                        title="Cursiva"
+                      >
+                        K
+                      </button>
+
+                      {/* Familia de fuente */}
+                      <select
+                        value={selectedElement.fontFamily || 'sans-serif'}
+                        onChange={(e) => updateSelectedFontFamily(e.target.value as 'sans-serif' | 'serif')}
+                        className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-800 dark:text-slate-200"
+                      >
+                        <option value="sans-serif">Sans-Serif</option>
+                        <option value="serif">Serif (Times)</option>
+                      </select>
+                    </div>
 
                     <div className="flex items-center gap-1.5">
                       <span className="text-[10px] text-slate-400 font-semibold select-none">Color:</span>
@@ -1027,7 +1231,7 @@ export default function Editor() {
 
                 <button
                   onClick={deleteSelectedElement}
-                  className="text-red-500 hover:text-red-600 hover:bg-red-500/10 p-1.5 rounded-lg transition-colors"
+                  className="text-red-500 hover:text-red-650 hover:bg-red-500/10 p-1.5 rounded-lg transition-colors"
                   title="Eliminar elemento del lienzo"
                 >
                   <Trash2 className="h-4 w-4" />
@@ -1035,7 +1239,7 @@ export default function Editor() {
               </div>
             )}
 
-            {/* Controles de Zoom continuo hasta 1000% */}
+            {/* Zoom */}
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setZoom(Math.max(0.2, Number((zoom - 0.2).toFixed(1))))}
@@ -1076,7 +1280,7 @@ export default function Editor() {
                     onClick={() => setCurrentPage(pageNum)}
                     className={`flex items-center justify-between p-2.5 rounded-xl border text-left transition-all min-w-[120px] lg:min-w-0 ${
                       isCurrent 
-                        ? 'border-emerald-500 bg-emerald-500/5 text-emerald-600 dark:text-emerald-450' 
+                        ? 'border-emerald-500 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400' 
                         : isDeleted
                         ? 'border-red-200 dark:border-red-950/20 bg-red-500/5 text-red-500 opacity-60'
                         : 'border-slate-100 dark:border-slate-850 hover:bg-slate-50 dark:hover:bg-slate-800'
@@ -1121,15 +1325,15 @@ export default function Editor() {
                       <button
                         onClick={rotateActivePage}
                         className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-750 text-slate-750 dark:text-slate-200 rounded-lg text-xs font-semibold transition-all"
-                        title="Rotar página 90 grados a la derecha"
+                        title="Rotar página 90 grados"
                       >
                         <RotateCw className="h-3.5 w-3.5" />
                         Rotar
                       </button>
                       <button
                         onClick={deleteActivePage}
-                        className="flex items-center gap-1 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 rounded-lg text-xs font-semibold transition-all"
-                        title="Eliminar página del documento"
+                        className="flex items-center gap-1 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-655 dark:text-red-400 rounded-lg text-xs font-semibold transition-all"
+                        title="Eliminar página"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                         Eliminar
@@ -1147,7 +1351,7 @@ export default function Editor() {
                 {activePageDeleted ? (
                   <div className="text-center p-8 max-w-md">
                     <ShieldAlert className="h-12 w-12 text-red-500 mx-auto mb-3" />
-                    <h4 className="font-bold text-slate-800 dark:text-white mb-1">Esta página ha sido excluida</h4>
+                    <h4 className="font-bold text-slate-855 dark:text-white mb-1">Esta página ha sido excluida</h4>
                     <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
                       No se incluirá en el archivo compilado. Puedes recuperarla en cualquier momento presionando el botón "Recuperar Página" superior.
                     </p>
@@ -1163,17 +1367,16 @@ export default function Editor() {
                     onPointerMove={handleContainerPointerMove}
                     onPointerUp={handleContainerPointerUp}
                   >
-                    {/* Canvas renderizado por PDF.js */}
                     <canvas
                       ref={canvasRef}
                       className="w-full h-full block rounded-xl pointer-events-none"
                       style={{ width: '100%', height: '100%' }}
                     />
 
-                    {/* Capa de Edición y Superposición Interactiva */}
+                    {/* Capa de Edición y Superposición */}
                     <div className="absolute inset-0 z-10 pointer-events-none">
                       
-                      {/* 1. Capa de Texto Original (Solo en modo edición de texto original) */}
+                      {/* 1. Capa de Texto Original */}
                       {isEditTextMode && originalTextItems.map((item) => {
                         if (hiddenOriginalTextIds.has(item.id)) return null;
                         return (
@@ -1183,7 +1386,7 @@ export default function Editor() {
                               e.stopPropagation();
                               handleEditOriginalText(item);
                             }}
-                            className="absolute border border-dashed border-emerald-500/50 hover:border-emerald-650 hover:bg-emerald-500/10 cursor-pointer pointer-events-auto z-20 group"
+                            className="absolute border border-dashed border-emerald-500/50 hover:border-emerald-600 hover:bg-emerald-500/10 cursor-pointer pointer-events-auto z-20 group"
                             style={{
                               left: `${item.x * 100}%`,
                               top: `${item.y * 100}%`,
@@ -1191,16 +1394,16 @@ export default function Editor() {
                               height: `${item.height * 100}%`,
                               willChange: 'transform',
                             }}
-                            title="Haz clic para modificar este bloque de texto original"
+                            title="Haz clic para modificar este texto original preservando el formato"
                           >
                             <div className="absolute top-[-16px] left-0 bg-emerald-600 text-white text-[8px] px-1 py-0.2 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none select-none">
-                              Modificar texto
+                              Modificar texto (conservando formato)
                             </div>
                           </div>
                         );
                       })}
 
-                      {/* 2. Capa de Elementos Agregados por el Usuario */}
+                      {/* 2. Capa de Elementos de Edición */}
                       {pageElements.map((el) => {
                         const isSel = el.id === selectedElementId;
 
@@ -1218,16 +1421,17 @@ export default function Editor() {
                               }}
                               className={`absolute cursor-move select-none pointer-events-auto px-2 py-1 rounded transition-all group ${
                                 isSel 
-                                  ? 'outline outline-2 outline-emerald-500 bg-white/90 dark:bg-slate-900/90 shadow-md' 
+                                  ? 'outline outline-2 outline-emerald-500 bg-white/90 dark:bg-slate-900/90 shadow-md z-30' 
                                   : 'hover:bg-slate-500/10 hover:outline hover:outline-1 hover:outline-slate-400'
                               }`}
                               style={{
                                 left: `${el.x * 100}%`,
                                 top: `${el.y * 100}%`,
-                                fontSize: `${el.fontSize / 2}px`, // Escalado visual
+                                fontSize: `${el.fontSize / 2}px`,
                                 color: el.color,
-                                fontFamily: 'Helvetica, Arial, sans-serif',
-                                fontWeight: 'normal',
+                                fontFamily: el.fontFamily === 'serif' ? 'Georgia, "Times New Roman", serif' : 'Helvetica, Arial, sans-serif',
+                                fontWeight: el.fontWeight || 'normal',
+                                fontStyle: el.fontStyle || 'normal',
                                 transform: 'translate(0, 0)',
                                 whiteSpace: 'nowrap',
                                 willChange: 'left, top',
@@ -1247,7 +1451,7 @@ export default function Editor() {
                               onClick={(e) => e.stopPropagation()}
                               className={`absolute cursor-move pointer-events-auto transition-all ${
                                 isSel 
-                                  ? 'outline outline-2 outline-emerald-500 shadow-md' 
+                                  ? 'outline outline-2 outline-emerald-500 shadow-md z-30' 
                                   : 'hover:outline hover:outline-1 hover:outline-slate-400'
                               }`}
                               style={{
@@ -1269,7 +1473,7 @@ export default function Editor() {
                                 <div
                                   onPointerDown={(e) => startResize(e, el)}
                                   className="absolute bottom-[-5px] right-[-5px] w-3.5 h-3.5 bg-emerald-500 border border-white dark:border-slate-900 rounded-full cursor-se-resize z-25 pointer-events-auto shadow-sm"
-                                  title="Arrastra para cambiar el tamaño"
+                                  title="Cambiar tamaño"
                                 />
                               )}
                             </div>
@@ -1283,7 +1487,7 @@ export default function Editor() {
                               onClick={(e) => e.stopPropagation()}
                               className={`absolute cursor-move pointer-events-auto transition-all ${
                                 isSel 
-                                  ? 'outline outline-2 outline-emerald-500 shadow-md animate-pulse' 
+                                  ? 'outline outline-2 outline-emerald-500 shadow-md z-30' 
                                   : 'hover:outline hover:outline-1 hover:outline-slate-400'
                               }`}
                               style={{
@@ -1303,7 +1507,7 @@ export default function Editor() {
                                 <div
                                   onPointerDown={(e) => startResize(e, el)}
                                   className="absolute bottom-[-5px] right-[-5px] w-3.5 h-3.5 bg-emerald-500 border border-white dark:border-slate-900 rounded-full cursor-se-resize z-25 pointer-events-auto shadow-sm"
-                                  title="Arrastra para redimensionar la forma"
+                                  title="Cambiar tamaño"
                                 />
                               )}
                             </div>
