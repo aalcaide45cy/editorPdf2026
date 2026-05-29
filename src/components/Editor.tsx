@@ -17,7 +17,8 @@ import {
   RefreshCw,
   Square,
   Circle,
-  Edit3
+  Edit3,
+  Undo
 } from 'lucide-react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { PDFDocument, rgb, degrees, StandardFonts } from 'pdf-lib';
@@ -79,7 +80,7 @@ interface OriginalTextItem {
   fontFamily: 'sans-serif' | 'serif';
 }
 
-// Analizar colores de texto y fondo leyendo píxeles del canvas
+// Analizar colores de texto y fondo leyendo píxeles del canvas con límites de seguridad estrictos
 const detectTextAndBgColor = (
   canvas: HTMLCanvasElement,
   x: number,
@@ -92,12 +93,16 @@ const detectTextAndBgColor = (
     if (!ctx) return { textColor: '#000000', bgColor: '#ffffff' };
 
     // Convertir de coordenadas relativas a píxeles físicos del lienzo
-    const pxX = Math.round(x * canvas.width);
-    const pxY = Math.round(y * canvas.height);
-    const pxW = Math.round(width * canvas.width);
-    const pxH = Math.round(height * canvas.height);
+    let pxX = Math.round(x * canvas.width);
+    let pxY = Math.round(y * canvas.height);
+    let pxW = Math.round(width * canvas.width);
+    let pxH = Math.round(height * canvas.height);
 
-    if (pxW <= 0 || pxH <= 0) return { textColor: '#000000', bgColor: '#ffffff' };
+    // Ajustar límites de seguridad
+    pxX = Math.max(0, Math.min(canvas.width - 1, pxX));
+    pxY = Math.max(0, Math.min(canvas.height - 1, pxY));
+    pxW = Math.max(1, Math.min(canvas.width - pxX, pxW));
+    pxH = Math.max(1, Math.min(canvas.height - pxY, pxH));
 
     const imgData = ctx.getImageData(pxX, pxY, pxW, pxH);
     const data = imgData.data;
@@ -128,7 +133,7 @@ const detectTextAndBgColor = (
       if (a < 50) continue; // ignorar transparentes
 
       const diff = Math.abs(r - bgR) + Math.abs(g - bgG) + Math.abs(b - bgB);
-      if (diff > 50) { // Umbral de contraste
+      if (diff > 30) { // Umbral de contraste más sensible (30) para trazos finos
         rSum += r;
         gSum += g;
         bSum += b;
@@ -143,7 +148,6 @@ const detectTextAndBgColor = (
       const bAvg = Math.round(bSum / count);
       textColor = `#${toHex(rAvg)}${toHex(gAvg)}${toHex(bAvg)}`;
     } else {
-      // Si no hay contraste detectado, usar el color inverso al brillo
       const brightness = (bgR * 299 + bgG * 587 + bgB * 114) / 1000;
       textColor = brightness > 125 ? '#000000' : '#ffffff';
     }
@@ -177,6 +181,9 @@ export default function Editor() {
   const [elements, setElements] = useState<{ [page: number]: EditorElement[] }>({});
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
   
+  // Undo/History stack
+  const [history, setHistory] = useState<{[page: number]: EditorElement[]}[]>([]);
+
   // Original PDF text detection
   const [isEditTextMode, setIsEditTextMode] = useState(false);
   const [originalTextItems, setOriginalTextItems] = useState<OriginalTextItem[]>([]);
@@ -198,6 +205,20 @@ export default function Editor() {
   const containerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+
+  // Auxiliar para propagar y guardar en el historial (Deshacer)
+  const pushToHistory = (newElements: {[page: number]: EditorElement[]}) => {
+    setHistory((prev) => [...prev, elements]);
+    setElements(newElements);
+  };
+
+  const handleUndo = () => {
+    if (history.length === 0) return;
+    const previousElements = history[history.length - 1];
+    setElements(previousElements);
+    setHistory((prev) => prev.slice(0, -1));
+    setSelectedElementId(null);
+  };
 
   // Evitar salida accidental
   useEffect(() => {
@@ -249,11 +270,13 @@ export default function Editor() {
             const itemWidth = item.width * viewport.scale;
             const itemHeight = fontSize * viewport.scale;
 
-            // Extraer y normalizar estilos tipográficos a partir del nombre de la fuente
-            const fontName = (item.fontName || '').toLowerCase();
+            // Extraer estilo desde textContent.styles para mayor precisión
+            const fontStyleObj = textContent.styles[item.fontName];
+            const fontName = ((fontStyleObj ? fontStyleObj.fontFamily : '') || item.fontName || '').toLowerCase();
+            
             const isBold = fontName.includes('bold') || fontName.includes('black') || fontName.includes('heavy') || fontName.includes('w700') || fontName.includes('w800') || fontName.includes('w900') || fontName.includes('w600');
             const isItalic = fontName.includes('italic') || fontName.includes('oblique') || fontName.includes('obli');
-            const isSerif = fontName.includes('times') || fontName.includes('serif') || fontName.includes('roman') || fontName.includes('georgia') || fontName.includes('minion');
+            const isSerif = fontName.includes('times') || fontName.includes('serif') || fontName.includes('roman') || fontName.includes('georgia') || fontName.includes('cambria') || fontName.includes('garamond');
             
             return {
               id: `orig-${currentPage}-${idx}`,
@@ -342,6 +365,7 @@ export default function Editor() {
         setElements({});
         setSelectedElementId(null);
         setIsEditTextMode(false);
+        setHistory([]);
         setLoadingMsg('');
       } catch (err) {
         console.error('Error parsing PDF:', err);
@@ -363,6 +387,7 @@ export default function Editor() {
     setElements({});
     setSelectedElementId(null);
     setIsEditTextMode(false);
+    setHistory([]);
     setLoadingMsg('');
   };
 
@@ -428,7 +453,7 @@ export default function Editor() {
       fontFamily: 'sans-serif'
     };
     const pageElements = elements[currentPage] || [];
-    setElements({
+    pushToHistory({
       ...elements,
       [currentPage]: [...pageElements, newText],
     });
@@ -446,7 +471,7 @@ export default function Editor() {
       height: 0.1,
     };
     const pageElements = elements[currentPage] || [];
-    setElements({
+    pushToHistory({
       ...elements,
       [currentPage]: [...pageElements, newSig],
     });
@@ -469,7 +494,7 @@ export default function Editor() {
       opacity: 1.0,
     };
     const pageElements = elements[currentPage] || [];
-    setElements({
+    pushToHistory({
       ...elements,
       [currentPage]: [...pageElements, newShape],
     });
@@ -492,7 +517,7 @@ export default function Editor() {
             height: 0.2,
           };
           const pageElements = elements[currentPage] || [];
-          setElements({
+          pushToHistory({
             ...elements,
             [currentPage]: [...pageElements, newImg],
           });
@@ -508,7 +533,6 @@ export default function Editor() {
     let detectedTextColor = '#000000';
     let detectedBgColor = '#ffffff';
 
-    // Muestrear los colores del canvas en tiempo real
     if (canvasRef.current) {
       const colors = detectTextAndBgColor(
         canvasRef.current,
@@ -553,7 +577,7 @@ export default function Editor() {
     };
 
     const pageElements = elements[currentPage] || [];
-    setElements({
+    pushToHistory({
       ...elements,
       [currentPage]: [...pageElements, whiteoutShape, editableText],
     });
@@ -668,7 +692,11 @@ export default function Editor() {
         }
         return el;
       });
-      setElements({ ...elements, [currentPage]: updated });
+      // Registrar en el historial solo si se ha movido
+      const orig = pageElements.find(item => item.id === selectedElementId);
+      if (orig && (orig.x !== elementCoordsRef.current.x || orig.y !== elementCoordsRef.current.y)) {
+        pushToHistory({ ...elements, [currentPage]: updated });
+      }
     } else if (isResizingRef.current && selectedElementId) {
       const pageElements = elements[currentPage] || [];
       const updated = pageElements.map((el) => {
@@ -677,7 +705,10 @@ export default function Editor() {
         }
         return el;
       });
-      setElements({ ...elements, [currentPage]: updated });
+      const orig = pageElements.find(item => item.id === selectedElementId) as any;
+      if (orig && (orig.width !== elementSizeRef.current.width || orig.height !== elementSizeRef.current.height)) {
+        pushToHistory({ ...elements, [currentPage]: updated });
+      }
     }
 
     isDraggingRef.current = false;
@@ -685,7 +716,7 @@ export default function Editor() {
     dragTargetRef.current = null;
   };
 
-  // Modificaciones de propiedades
+  // Modificaciones de propiedades con pushToHistory
   const updateSelectedText = (text: string) => {
     const pageElements = elements[currentPage] || [];
     const updated = pageElements.map((el) => {
@@ -694,7 +725,7 @@ export default function Editor() {
       }
       return el;
     });
-    setElements({ ...elements, [currentPage]: updated });
+    pushToHistory({ ...elements, [currentPage]: updated });
   };
 
   const updateSelectedFontSize = (fontSize: number) => {
@@ -705,7 +736,7 @@ export default function Editor() {
       }
       return el;
     });
-    setElements({ ...elements, [currentPage]: updated });
+    pushToHistory({ ...elements, [currentPage]: updated });
   };
 
   const updateSelectedColor = (color: string) => {
@@ -716,7 +747,7 @@ export default function Editor() {
       }
       return el;
     });
-    setElements({ ...elements, [currentPage]: updated });
+    pushToHistory({ ...elements, [currentPage]: updated });
   };
 
   const toggleSelectedBold = () => {
@@ -728,7 +759,7 @@ export default function Editor() {
       }
       return el;
     });
-    setElements({ ...elements, [currentPage]: updated });
+    pushToHistory({ ...elements, [currentPage]: updated });
   };
 
   const toggleSelectedItalic = () => {
@@ -740,7 +771,7 @@ export default function Editor() {
       }
       return el;
     });
-    setElements({ ...elements, [currentPage]: updated });
+    pushToHistory({ ...elements, [currentPage]: updated });
   };
 
   const updateSelectedFontFamily = (family: 'sans-serif' | 'serif') => {
@@ -751,7 +782,7 @@ export default function Editor() {
       }
       return el;
     });
-    setElements({ ...elements, [currentPage]: updated });
+    pushToHistory({ ...elements, [currentPage]: updated });
   };
 
   const updateSelectedBorderColor = (borderColor: string) => {
@@ -762,7 +793,7 @@ export default function Editor() {
       }
       return el;
     });
-    setElements({ ...elements, [currentPage]: updated });
+    pushToHistory({ ...elements, [currentPage]: updated });
   };
 
   const updateSelectedBorderWidth = (borderWidth: number) => {
@@ -773,7 +804,7 @@ export default function Editor() {
       }
       return el;
     });
-    setElements({ ...elements, [currentPage]: updated });
+    pushToHistory({ ...elements, [currentPage]: updated });
   };
 
   const updateSelectedOpacity = (opacity: number) => {
@@ -784,14 +815,14 @@ export default function Editor() {
       }
       return el;
     });
-    setElements({ ...elements, [currentPage]: updated });
+    pushToHistory({ ...elements, [currentPage]: updated });
   };
 
   const deleteSelectedElement = () => {
     if (!selectedElementId) return;
     const pageElements = elements[currentPage] || [];
     const updated = pageElements.filter((el) => el.id !== selectedElementId);
-    setElements({ ...elements, [currentPage]: updated });
+    pushToHistory({ ...elements, [currentPage]: updated });
     setSelectedElementId(null);
   };
 
@@ -828,7 +859,6 @@ export default function Editor() {
           
           for (const el of pageElements) {
             if (el.type === 'text') {
-              // Mapear la tipografía correcta con estilo en pdf-lib
               let selectedFont = StandardFonts.Helvetica;
               const isSerif = el.fontFamily === 'serif';
               
@@ -1092,6 +1122,17 @@ export default function Editor() {
                 <Edit3 className="h-4 w-4" />
                 <span>Modificar Original</span>
               </button>
+
+              {/* Botón Deshacer */}
+              <button
+                onClick={handleUndo}
+                disabled={history.length === 0}
+                className="flex items-center gap-1.5 px-3 py-2 bg-slate-150 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-semibold transition-all disabled:opacity-40"
+                title="Deshacer última acción"
+              >
+                <Undo className="h-4 w-4" />
+                <span>Deshacer</span>
+              </button>
             </div>
 
             {/* Ajustes de Elementos Seleccionados */}
@@ -1119,7 +1160,6 @@ export default function Editor() {
 
                     {/* Controles de Estilos Tipográficos */}
                     <div className="flex items-center gap-1.5 border-l border-r border-slate-200 dark:border-slate-800 px-2.5 py-0.5">
-                      {/* Negrita */}
                       <button
                         onClick={toggleSelectedBold}
                         className={`p-1.5 rounded-lg text-xs font-bold w-7 h-7 flex items-center justify-center transition-all ${
@@ -1132,7 +1172,6 @@ export default function Editor() {
                         N
                       </button>
 
-                      {/* Cursiva */}
                       <button
                         onClick={toggleSelectedItalic}
                         className={`p-1.5 rounded-lg text-xs italic font-semibold w-7 h-7 flex items-center justify-center transition-all ${
@@ -1145,7 +1184,6 @@ export default function Editor() {
                         K
                       </button>
 
-                      {/* Familia de fuente */}
                       <select
                         value={selectedElement.fontFamily || 'sans-serif'}
                         onChange={(e) => updateSelectedFontFamily(e.target.value as 'sans-serif' | 'serif')}
@@ -1172,7 +1210,6 @@ export default function Editor() {
                   <>
                     <span className="text-xs text-slate-400 font-bold select-none">Forma:</span>
                     
-                    {/* Color de Relleno */}
                     <div className="flex items-center gap-1.5">
                       <span className="text-[10px] text-slate-400 font-semibold select-none">Relleno:</span>
                       <input
@@ -1183,7 +1220,6 @@ export default function Editor() {
                       />
                     </div>
 
-                    {/* Color de Borde */}
                     <div className="flex items-center gap-1.5">
                       <span className="text-[10px] text-slate-400 font-semibold select-none">Borde:</span>
                       <input
@@ -1194,7 +1230,6 @@ export default function Editor() {
                       />
                     </div>
 
-                    {/* Grosor de Borde */}
                     <div className="flex items-center gap-1.5">
                       <span className="text-[10px] text-slate-400 font-semibold select-none">Grosor:</span>
                       <select
@@ -1208,7 +1243,6 @@ export default function Editor() {
                       </select>
                     </div>
 
-                    {/* Opacidad */}
                     <div className="flex items-center gap-1.5">
                       <span className="text-[10px] text-slate-400 font-semibold select-none">Opacidad:</span>
                       <input
@@ -1280,7 +1314,7 @@ export default function Editor() {
                     onClick={() => setCurrentPage(pageNum)}
                     className={`flex items-center justify-between p-2.5 rounded-xl border text-left transition-all min-w-[120px] lg:min-w-0 ${
                       isCurrent 
-                        ? 'border-emerald-500 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400' 
+                        ? 'border-emerald-500 bg-emerald-500/5 text-emerald-600 dark:text-emerald-405' 
                         : isDeleted
                         ? 'border-red-200 dark:border-red-950/20 bg-red-500/5 text-red-500 opacity-60'
                         : 'border-slate-100 dark:border-slate-850 hover:bg-slate-50 dark:hover:bg-slate-800'
@@ -1346,12 +1380,17 @@ export default function Editor() {
               {/* CONTENEDOR DEL LIENZO */}
               <div 
                 className="relative overflow-auto border border-slate-200 dark:border-slate-800 rounded-3xl max-w-full bg-slate-100 dark:bg-slate-900/30 flex justify-center items-center p-4 min-h-[400px] w-full transition-colors"
-                onClick={() => setSelectedElementId(null)}
+                onClick={(e) => {
+                  // Deseleccionar elemento únicamente si se hace clic en el fondo vacío o en el CANVAS
+                  if (e.target === e.currentTarget || (e.target as HTMLElement).tagName === 'CANVAS') {
+                    setSelectedElementId(null);
+                  }
+                }}
               >
                 {activePageDeleted ? (
                   <div className="text-center p-8 max-w-md">
                     <ShieldAlert className="h-12 w-12 text-red-500 mx-auto mb-3" />
-                    <h4 className="font-bold text-slate-855 dark:text-white mb-1">Esta página ha sido excluida</h4>
+                    <h4 className="font-bold text-slate-800 dark:text-white mb-1">Esta página ha sido excluida</h4>
                     <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
                       No se incluirá en el archivo compilado. Puedes recuperarla en cualquier momento presionando el botón "Recuperar Página" superior.
                     </p>
