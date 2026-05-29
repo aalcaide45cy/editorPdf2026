@@ -17,7 +17,7 @@ import {
   RefreshCw,
   Square,
   Circle,
-  Layers
+  Edit3
 } from 'lucide-react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { PDFDocument, rgb, degrees, StandardFonts } from 'pdf-lib';
@@ -63,6 +63,16 @@ interface ShapeElement {
 
 type EditorElement = TextElement | ImageElement | ShapeElement;
 
+interface OriginalTextItem {
+  id: string;
+  text: string;
+  x: number; // Coordenada relativa (0..1)
+  y: number; // Coordenada relativa (0..1)
+  width: number; // Ancho relativo (0..1)
+  height: number; // Alto relativo (0..1)
+  fontSize: number;
+}
+
 export default function Editor() {
   // Document states
   const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -75,6 +85,7 @@ export default function Editor() {
   const [zoom, setZoom] = useState<number>(1.2);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState<string>('');
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
 
   // Page manipulation states
   const [rotations, setRotations] = useState<{ [page: number]: number }>({});
@@ -84,6 +95,11 @@ export default function Editor() {
   const [elements, setElements] = useState<{ [page: number]: EditorElement[] }>({});
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
   
+  // Original PDF text detection
+  const [isEditTextMode, setIsEditTextMode] = useState(false);
+  const [originalTextItems, setOriginalTextItems] = useState<OriginalTextItem[]>([]);
+  const [hiddenOriginalTextIds, setHiddenOriginalTextIds] = useState<Set<string>>(new Set());
+
   // Interactive tools states
   const [showSignaturePad, setShowSignaturePad] = useState(false);
   
@@ -120,6 +136,60 @@ export default function Editor() {
     renderPage(currentPage);
   }, [pdfDocProxy, currentPage, zoom, rotations[currentPage]]);
 
+  // Detección de texto original del PDF al cambiar de página
+  useEffect(() => {
+    if (!pdfDocProxy) {
+      setOriginalTextItems([]);
+      setHiddenOriginalTextIds(new Set());
+      return;
+    }
+
+    const loadOriginalText = async () => {
+      try {
+        const page = await pdfDocProxy.getPage(currentPage);
+        const textContent = await page.getTextContent();
+        
+        // Usar un viewport de escala 1.0 constante para calcular coordenadas relativas
+        const rotation = rotations[currentPage] || 0;
+        const viewport = page.getViewport({ scale: 1.0, rotation });
+        
+        const items: OriginalTextItem[] = textContent.items
+          .filter((item: any) => item.str && item.str.trim().length > 0)
+          .map((item: any, idx: number) => {
+            const matrix = item.transform; // [a, b, c, d, tx, ty]
+            const tx = matrix[4];
+            const ty = matrix[5];
+            
+            // Convertir coordenadas de línea de base nativas del PDF al viewport
+            const [x, y] = viewport.convertToViewportPoint(tx, ty);
+            
+            // La altura de la fuente se estima a partir de la matriz de transformación
+            const fontSize = Math.abs(matrix[3]) || 12;
+            
+            const itemWidth = item.width * viewport.scale;
+            const itemHeight = fontSize * viewport.scale;
+            
+            return {
+              id: `orig-${currentPage}-${idx}`,
+              text: item.str,
+              x: x / viewport.width,
+              y: (y - itemHeight) / viewport.height, // Ajustar Y desde la línea de base
+              width: itemWidth / viewport.width,
+              height: itemHeight / viewport.height,
+              fontSize: fontSize,
+            };
+          });
+        
+        setOriginalTextItems(items);
+        setHiddenOriginalTextIds(new Set());
+      } catch (err) {
+        console.error('Error cargando textos originales:', err);
+      }
+    };
+
+    loadOriginalText();
+  }, [pdfDocProxy, currentPage, rotations[currentPage]]);
+
   const renderPage = async (pageNum: number) => {
     if (!pdfDocProxy || !canvasRef.current) return;
 
@@ -150,6 +220,9 @@ export default function Editor() {
       };
 
       await page.render(renderContext).promise;
+      
+      // Guardar el tamaño final calculado del viewport (escala de visualización a la mitad de retina)
+      setCanvasSize({ width: viewport.width / 2, height: viewport.height / 2 });
     } catch (error) {
       console.error('Error rendering page:', error);
     }
@@ -180,6 +253,7 @@ export default function Editor() {
         setDeletedPages(new Set());
         setElements({});
         setSelectedElementId(null);
+        setIsEditTextMode(false);
         setLoadingMsg('');
       } catch (err) {
         console.error('Error parsing PDF:', err);
@@ -200,6 +274,7 @@ export default function Editor() {
     setDeletedPages(new Set());
     setElements({});
     setSelectedElementId(null);
+    setIsEditTextMode(false);
     setLoadingMsg('');
   };
 
@@ -297,9 +372,9 @@ export default function Editor() {
       y: 0.3,
       width: 0.2,
       height: 0.15,
-      color: '#ffffff', // relleno blanco
-      borderColor: '#059669', // borde esmeralda
-      borderWidth: 2,
+      color: '#ffffff', // relleno blanco para actuar de borrador
+      borderColor: '#000000',
+      borderWidth: 0, // sin borde por defecto
       opacity: 1.0,
     };
     const pageElements = elements[currentPage] || [];
@@ -337,6 +412,52 @@ export default function Editor() {
     }
   };
 
+  // Simular la edición del texto original
+  const handleEditOriginalText = (item: OriginalTextItem) => {
+    // 1. Añadir un borrador blanco (whiteout shape) en la misma posición
+    const whiteoutId = `whiteout-${Date.now()}`;
+    const whiteoutShape: ShapeElement = {
+      id: whiteoutId,
+      type: 'shape',
+      shapeType: 'rect',
+      // Añadir pequeños márgenes para cubrir completamente
+      x: item.x - 0.003,
+      y: item.y - 0.003,
+      width: item.width + 0.006,
+      height: item.height + 0.006,
+      color: '#ffffff', // Fondo blanco para ocultar el texto original
+      borderColor: '#ffffff',
+      borderWidth: 0,
+      opacity: 1.0,
+    };
+
+    // 2. Añadir el cuadro de texto editable justo encima
+    const textId = `text-edit-${Date.now()}`;
+    const editableText: TextElement = {
+      id: textId,
+      type: 'text',
+      text: item.text,
+      x: item.x,
+      y: item.y + 0.002, // Margen mínimo de alineación
+      fontSize: item.fontSize,
+      color: '#000000',
+    };
+
+    const pageElements = elements[currentPage] || [];
+    setElements({
+      ...elements,
+      [currentPage]: [...pageElements, whiteoutShape, editableText],
+    });
+
+    // Ocultar este texto original en la capa interactiva local
+    const newHidden = new Set(hiddenOriginalTextIds);
+    newHidden.add(item.id);
+    setHiddenOriginalTextIds(newHidden);
+
+    // Seleccionar el nuevo texto editable inmediatamente
+    setSelectedElementId(textId);
+  };
+
   // --- LÓGICA DE ARRASTRE Y REDIMENSIÓN DE ALTO RENDIMIENTO (SIN LAG) ---
   const handleElementPointerDown = (e: React.PointerEvent<HTMLDivElement>, element: EditorElement) => {
     e.stopPropagation();
@@ -370,7 +491,7 @@ export default function Editor() {
     isResizingRef.current = true;
     
     const container = containerRef.current;
-    if (!container || !containerRef.current) return;
+    if (!container) return;
 
     const parentNode = (e.target as HTMLElement).parentNode as HTMLDivElement;
     dragTargetRef.current = parentNode;
@@ -403,7 +524,7 @@ export default function Editor() {
       
       elementCoordsRef.current = { x: newX, y: newY };
       
-      // Actualizar el DOM directamente a 60fps (sin lag)
+      // Modificar directamente los estilos CSS (GPU-accelerated / Zero Lag)
       dragTargetRef.current.style.left = `${newX * 100}%`;
       dragTargetRef.current.style.top = `${newY * 100}%`;
       
@@ -414,15 +535,13 @@ export default function Editor() {
       let newWidth = resizeDataRef.current.width + (deltaX / rect.width);
       let newHeight = resizeDataRef.current.height + (deltaY / rect.height);
       
-      // Limitar tamaños
       const el = (elements[currentPage] || []).find(item => item.id === selectedElementId);
       if (el) {
-        newWidth = Math.max(0.02, Math.min(1 - el.x, newWidth));
+        newWidth = Math.max(0.01, Math.min(1 - el.x, newWidth));
         newHeight = Math.max(0.01, Math.min(1 - el.y, newHeight));
         
         elementSizeRef.current = { width: newWidth, height: newHeight };
         
-        // Actualizar el DOM directamente
         dragTargetRef.current.style.width = `${newWidth * 100}%`;
         dragTargetRef.current.style.height = `${newHeight * 100}%`;
       }
@@ -436,7 +555,7 @@ export default function Editor() {
     }
 
     if (isDraggingRef.current && selectedElementId) {
-      // Guardar el estado final en React
+      // Sincronizar en el estado de React solo al soltar el ratón
       const pageElements = elements[currentPage] || [];
       const updated = pageElements.map((el) => {
         if (el.id === selectedElementId) {
@@ -446,7 +565,6 @@ export default function Editor() {
       });
       setElements({ ...elements, [currentPage]: updated });
     } else if (isResizingRef.current && selectedElementId) {
-      // Guardar el estado final de tamaño en React
       const pageElements = elements[currentPage] || [];
       const updated = pageElements.map((el) => {
         if (el.id === selectedElementId && (el.type === 'image' || el.type === 'shape')) {
@@ -462,7 +580,7 @@ export default function Editor() {
     dragTargetRef.current = null;
   };
 
-  // Modificar propiedades del elemento seleccionado
+  // Modificaciones de propiedades
   const updateSelectedText = (text: string) => {
     const pageElements = elements[currentPage] || [];
     const updated = pageElements.map((el) => {
@@ -537,7 +655,7 @@ export default function Editor() {
     setSelectedElementId(null);
   };
 
-  // Compilación final con pdf-lib e inversión Y
+  // Guardado nativo
   const compileAndDownload = async () => {
     if (!pdfBytes) return;
 
@@ -715,7 +833,7 @@ export default function Editor() {
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           onClick={() => fileInputRef.current?.click()}
-          className={`border-2 border-dashed rounded-3xl p-16 flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-300 ${
+          className={`border-2 border-dashed rounded-3xl p-16 flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-350 ${
             isDraggingOver 
               ? 'border-emerald-500 bg-emerald-500/5 dark:bg-emerald-500/10 scale-[0.99] shadow-inner' 
               : 'border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900/40 hover:border-emerald-400 hover:bg-slate-50 dark:hover:bg-slate-900/80'
@@ -747,34 +865,11 @@ export default function Editor() {
                 onClick={addTextElement}
                 disabled={activePageDeleted}
                 className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
-                title="Añadir Texto"
+                title="Añadir Nuevo Texto"
               >
                 <Type className="h-4 w-4" />
                 <span>Texto</span>
               </button>
-
-              <button
-                onClick={() => setShowSignaturePad(true)}
-                disabled={activePageDeleted}
-                className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
-                title="Insertar Firma"
-              >
-                <PenTool className="h-4 w-4" />
-                <span>Firmar</span>
-              </button>
-
-              <button
-                onClick={() => imageInputRef.current?.click()}
-                disabled={activePageDeleted}
-                className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
-                title="Añadir Imagen"
-              >
-                <FileImage className="h-4 w-4" />
-                <span>Imagen</span>
-              </button>
-
-              {/* Formas Básicas */}
-              <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1" />
 
               <button
                 onClick={() => addShapeElement('rect')}
@@ -795,9 +890,46 @@ export default function Editor() {
                 <Circle className="h-4 w-4" />
                 <span>Círculo</span>
               </button>
+
+              <button
+                onClick={() => setShowSignaturePad(true)}
+                disabled={activePageDeleted}
+                className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
+                title="Dibujar e Insertar Firma"
+              >
+                <PenTool className="h-4 w-4" />
+                <span>Firmar</span>
+              </button>
+
+              <button
+                onClick={() => imageInputRef.current?.click()}
+                disabled={activePageDeleted}
+                className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
+                title="Subir Imagen Local"
+              >
+                <FileImage className="h-4 w-4" />
+                <span>Imagen</span>
+              </button>
+
+              <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1" />
+
+              {/* Botón para Editar Texto Original */}
+              <button
+                onClick={() => setIsEditTextMode(!isEditTextMode)}
+                disabled={activePageDeleted || originalTextItems.length === 0}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-40 ${
+                  isEditTextMode 
+                    ? 'bg-emerald-500 hover:bg-emerald-600 text-white shadow-sm' 
+                    : 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400'
+                }`}
+                title="Habilitar/Deshabilitar capa para editar el texto original del documento"
+              >
+                <Edit3 className="h-4 w-4" />
+                <span>Modificar Original</span>
+              </button>
             </div>
 
-            {/* Ajustes de Elementos */}
+            {/* Ajustes de Elementos Seleccionados */}
             {selectedElement && (
               <div className="flex flex-wrap items-center gap-3 bg-slate-50 dark:bg-slate-950 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-850">
                 {selectedElement.type === 'text' && (
@@ -815,7 +947,7 @@ export default function Editor() {
                       onChange={(e) => updateSelectedFontSize(Number(e.target.value))}
                       className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-800 dark:text-slate-200"
                     >
-                      {[8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 40, 48].map((s) => (
+                      {[6, 8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 40, 48, 56, 72].map((s) => (
                         <option key={s} value={s}>{s}px</option>
                       ))}
                     </select>
@@ -860,26 +992,26 @@ export default function Editor() {
 
                     {/* Grosor de Borde */}
                     <div className="flex items-center gap-1.5">
-                      <span className="text-[10px] text-slate-400 font-semibold select-none">Línea:</span>
+                      <span className="text-[10px] text-slate-400 font-semibold select-none">Grosor:</span>
                       <select
                         value={selectedElement.borderWidth}
                         onChange={(e) => updateSelectedBorderWidth(Number(e.target.value))}
                         className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
                       >
-                        {[0, 1, 2, 3, 4, 6, 8].map((w) => (
+                        {[0, 1, 2, 3, 4, 6, 8, 12].map((w) => (
                           <option key={w} value={w}>{w === 0 ? 'Sin Borde' : `${w}px`}</option>
                         ))}
                       </select>
                     </div>
 
-                    {/* Transparencia / Opacidad */}
+                    {/* Opacidad */}
                     <div className="flex items-center gap-1.5">
                       <span className="text-[10px] text-slate-400 font-semibold select-none">Opacidad:</span>
                       <input
                         type="range"
                         min="0.1"
                         max="1"
-                        step="0.1"
+                        step="0.05"
                         value={selectedElement.opacity}
                         onChange={(e) => updateSelectedOpacity(Number(e.target.value))}
                         className="w-16 h-1 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
@@ -889,32 +1021,36 @@ export default function Editor() {
                   </>
                 )}
 
+                {selectedElement.type === 'image' && (
+                  <span className="text-xs text-slate-400 font-bold select-none">Firma / Imagen seleccionada</span>
+                )}
+
                 <button
                   onClick={deleteSelectedElement}
-                  className="text-red-500 hover:text-red-650 hover:bg-red-500/10 p-1.5 rounded-lg transition-colors"
-                  title="Eliminar elemento"
+                  className="text-red-500 hover:text-red-600 hover:bg-red-500/10 p-1.5 rounded-lg transition-colors"
+                  title="Eliminar elemento del lienzo"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
               </div>
             )}
 
-            {/* Zoom */}
+            {/* Controles de Zoom continuo hasta 1000% */}
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setZoom(Math.max(0.5, zoom - 0.1))}
+                onClick={() => setZoom(Math.max(0.2, Number((zoom - 0.2).toFixed(1))))}
                 className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-600 dark:text-slate-350 transition-colors"
                 title="Alejar Zoom"
               >
                 <ZoomOut className="h-4 w-4" />
               </button>
-              <span className="text-xs font-semibold text-slate-500 select-none w-12 text-center">
+              <span className="text-xs font-semibold text-slate-500 select-none w-14 text-center">
                 {Math.round(zoom * 100)}%
               </span>
               <button
-                onClick={() => setZoom(Math.min(2.5, zoom + 0.1))}
+                onClick={() => setZoom(Math.min(10.0, Number((zoom + 0.2).toFixed(1))))}
                 className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-600 dark:text-slate-350 transition-colors"
-                title="Acercar Zoom"
+                title="Acercar Zoom (Hasta 1000%)"
               >
                 <ZoomIn className="h-4 w-4" />
               </button>
@@ -924,7 +1060,7 @@ export default function Editor() {
           {/* MAIN AREA */}
           <div className="flex flex-col lg:flex-row gap-6 items-start">
             
-            {/* MINIATURAS PÁGINAS */}
+            {/* MINIATURAS */}
             <div className="w-full lg:w-60 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 flex lg:flex-col gap-4 overflow-x-auto lg:overflow-x-visible lg:max-h-[600px] lg:overflow-y-auto transition-colors">
               <div className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-1 hidden lg:block select-none">
                 PÁGINAS DEL DOCUMENTO
@@ -940,7 +1076,7 @@ export default function Editor() {
                     onClick={() => setCurrentPage(pageNum)}
                     className={`flex items-center justify-between p-2.5 rounded-xl border text-left transition-all min-w-[120px] lg:min-w-0 ${
                       isCurrent 
-                        ? 'border-emerald-500 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400' 
+                        ? 'border-emerald-500 bg-emerald-500/5 text-emerald-600 dark:text-emerald-450' 
                         : isDeleted
                         ? 'border-red-200 dark:border-red-950/20 bg-red-500/5 text-red-500 opacity-60'
                         : 'border-slate-100 dark:border-slate-850 hover:bg-slate-50 dark:hover:bg-slate-800'
@@ -956,10 +1092,9 @@ export default function Editor() {
               })}
             </div>
 
-            {/* ÁREA DEL PDF ACTIVO */}
+            {/* ÁREA DEL LIENZO */}
             <div className="flex-grow flex flex-col items-center gap-4 w-full">
               
-              {/* Controles superiores del canvas */}
               <div className="w-full flex items-center justify-between bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-4 py-2.5 rounded-2xl shadow-sm transition-colors">
                 <div className="flex items-center gap-3">
                   <span className="text-sm font-bold text-slate-700 dark:text-slate-200">
@@ -968,7 +1103,7 @@ export default function Editor() {
                   {activePageDeleted && (
                     <span className="flex items-center gap-1 text-xs font-semibold text-red-500 bg-red-500/10 px-2 py-0.5 rounded-full border border-red-500/15 animate-pulse">
                       <ShieldAlert className="h-3 w-3" />
-                      Excluida de la descarga
+                      Excluida del documento final
                     </span>
                   )}
                 </div>
@@ -985,8 +1120,8 @@ export default function Editor() {
                     <>
                       <button
                         onClick={rotateActivePage}
-                        className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-750 text-slate-755 dark:text-slate-200 rounded-lg text-xs font-semibold transition-all"
-                        title="Rotar 90 grados"
+                        className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-750 text-slate-750 dark:text-slate-200 rounded-lg text-xs font-semibold transition-all"
+                        title="Rotar página 90 grados a la derecha"
                       >
                         <RotateCw className="h-3.5 w-3.5" />
                         Rotar
@@ -994,7 +1129,7 @@ export default function Editor() {
                       <button
                         onClick={deleteActivePage}
                         className="flex items-center gap-1 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 rounded-lg text-xs font-semibold transition-all"
-                        title="Eliminar página"
+                        title="Eliminar página del documento"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                         Eliminar
@@ -1014,29 +1149,58 @@ export default function Editor() {
                     <ShieldAlert className="h-12 w-12 text-red-500 mx-auto mb-3" />
                     <h4 className="font-bold text-slate-800 dark:text-white mb-1">Esta página ha sido excluida</h4>
                     <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
-                      No se incluirá en el archivo descargado. Puedes recuperarla en cualquier momento presionando el botón "Recuperar Página" superior.
+                      No se incluirá en el archivo compilado. Puedes recuperarla en cualquier momento presionando el botón "Recuperar Página" superior.
                     </p>
                   </div>
                 ) : (
                   <div 
                     ref={containerRef}
-                    className="relative cursor-default select-none shadow-lg"
+                    className="relative cursor-default select-none shadow-lg bg-white"
                     style={{ 
-                      width: canvasRef.current?.width ? canvasRef.current.width / 2 : 'auto', 
-                      height: canvasRef.current?.height ? canvasRef.current.height / 2 : 'auto' 
+                      width: canvasSize.width > 0 ? canvasSize.width : 'auto', 
+                      height: canvasSize.height > 0 ? canvasSize.height : 'auto' 
                     }}
                     onPointerMove={handleContainerPointerMove}
                     onPointerUp={handleContainerPointerUp}
                   >
-                    {/* Lienzo del PDF */}
+                    {/* Canvas renderizado por PDF.js */}
                     <canvas
                       ref={canvasRef}
-                      className="w-full h-full block rounded-xl pointer-events-none bg-white"
+                      className="w-full h-full block rounded-xl pointer-events-none"
                       style={{ width: '100%', height: '100%' }}
                     />
 
-                    {/* Capa de Edición */}
+                    {/* Capa de Edición y Superposición Interactiva */}
                     <div className="absolute inset-0 z-10 pointer-events-none">
+                      
+                      {/* 1. Capa de Texto Original (Solo en modo edición de texto original) */}
+                      {isEditTextMode && originalTextItems.map((item) => {
+                        if (hiddenOriginalTextIds.has(item.id)) return null;
+                        return (
+                          <div
+                            key={item.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleEditOriginalText(item);
+                            }}
+                            className="absolute border border-dashed border-emerald-500/50 hover:border-emerald-650 hover:bg-emerald-500/10 cursor-pointer pointer-events-auto z-20 group"
+                            style={{
+                              left: `${item.x * 100}%`,
+                              top: `${item.y * 100}%`,
+                              width: `${item.width * 100}%`,
+                              height: `${item.height * 100}%`,
+                              willChange: 'transform',
+                            }}
+                            title="Haz clic para modificar este bloque de texto original"
+                          >
+                            <div className="absolute top-[-16px] left-0 bg-emerald-600 text-white text-[8px] px-1 py-0.2 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none select-none">
+                              Modificar texto
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                      {/* 2. Capa de Elementos Agregados por el Usuario */}
                       {pageElements.map((el) => {
                         const isSel = el.id === selectedElementId;
 
@@ -1045,6 +1209,8 @@ export default function Editor() {
                             <div
                               key={el.id}
                               onPointerDown={(e) => handleElementPointerDown(e, el)}
+                              onPointerUp={(e) => e.stopPropagation()}
+                              onClick={(e) => e.stopPropagation()}
                               onDoubleClick={(e) => {
                                 e.stopPropagation();
                                 const newTxt = prompt('Editar texto:', el.text);
@@ -1052,20 +1218,22 @@ export default function Editor() {
                               }}
                               className={`absolute cursor-move select-none pointer-events-auto px-2 py-1 rounded transition-all group ${
                                 isSel 
-                                  ? 'outline outline-2 outline-emerald-500 bg-white/80 dark:bg-slate-900/80 shadow-md' 
+                                  ? 'outline outline-2 outline-emerald-500 bg-white/90 dark:bg-slate-900/90 shadow-md' 
                                   : 'hover:bg-slate-500/10 hover:outline hover:outline-1 hover:outline-slate-400'
                               }`}
                               style={{
                                 left: `${el.x * 100}%`,
                                 top: `${el.y * 100}%`,
-                                fontSize: `${el.fontSize / 2}px`,
+                                fontSize: `${el.fontSize / 2}px`, // Escalado visual
                                 color: el.color,
                                 fontFamily: 'Helvetica, Arial, sans-serif',
                                 fontWeight: 'normal',
                                 transform: 'translate(0, 0)',
-                                whiteSpace: 'nowrap'
+                                whiteSpace: 'nowrap',
+                                willChange: 'left, top',
+                                touchAction: 'none',
                               }}
-                              title="Haz doble clic para editar el texto"
+                              title="Doble clic para editar. Arrastra para mover."
                             >
                               {el.text}
                             </div>
@@ -1075,6 +1243,8 @@ export default function Editor() {
                             <div
                               key={el.id}
                               onPointerDown={(e) => handleElementPointerDown(e, el)}
+                              onPointerUp={(e) => e.stopPropagation()}
+                              onClick={(e) => e.stopPropagation()}
                               className={`absolute cursor-move pointer-events-auto transition-all ${
                                 isSel 
                                   ? 'outline outline-2 outline-emerald-500 shadow-md' 
@@ -1085,19 +1255,21 @@ export default function Editor() {
                                 top: `${el.y * 100}%`,
                                 width: `${el.width * 100}%`,
                                 height: `${el.height * 100}%`,
+                                willChange: 'left, top, width, height',
+                                touchAction: 'none',
                               }}
                             >
                               <img 
                                 src={el.dataUrl} 
-                                alt="Firma o Imagen insertada" 
+                                alt="Imagen" 
                                 className="w-full h-full object-contain pointer-events-none"
                               />
 
                               {isSel && (
                                 <div
                                   onPointerDown={(e) => startResize(e, el)}
-                                  className="absolute bottom-[-5px] right-[-5px] w-3.5 h-3.5 bg-emerald-500 border border-white dark:border-slate-900 rounded-full cursor-se-resize z-20 pointer-events-auto shadow-sm"
-                                  title="Arrastra para redimensionar"
+                                  className="absolute bottom-[-5px] right-[-5px] w-3.5 h-3.5 bg-emerald-500 border border-white dark:border-slate-900 rounded-full cursor-se-resize z-25 pointer-events-auto shadow-sm"
+                                  title="Arrastra para cambiar el tamaño"
                                 />
                               )}
                             </div>
@@ -1107,9 +1279,11 @@ export default function Editor() {
                             <div
                               key={el.id}
                               onPointerDown={(e) => handleElementPointerDown(e, el)}
+                              onPointerUp={(e) => e.stopPropagation()}
+                              onClick={(e) => e.stopPropagation()}
                               className={`absolute cursor-move pointer-events-auto transition-all ${
                                 isSel 
-                                  ? 'outline outline-2 outline-emerald-500 shadow-md' 
+                                  ? 'outline outline-2 outline-emerald-500 shadow-md animate-pulse' 
                                   : 'hover:outline hover:outline-1 hover:outline-slate-400'
                               }`}
                               style={{
@@ -1121,13 +1295,15 @@ export default function Editor() {
                                 border: el.borderWidth > 0 ? `${el.borderWidth / 2}px solid ${el.borderColor}` : 'none',
                                 borderRadius: el.shapeType === 'circle' ? '50%' : '0px',
                                 opacity: el.opacity,
+                                willChange: 'left, top, width, height',
+                                touchAction: 'none',
                               }}
                             >
                               {isSel && (
                                 <div
                                   onPointerDown={(e) => startResize(e, el)}
-                                  className="absolute bottom-[-5px] right-[-5px] w-3.5 h-3.5 bg-emerald-500 border border-white dark:border-slate-900 rounded-full cursor-se-resize z-20 pointer-events-auto shadow-sm"
-                                  title="Arrastra para redimensionar"
+                                  className="absolute bottom-[-5px] right-[-5px] w-3.5 h-3.5 bg-emerald-500 border border-white dark:border-slate-900 rounded-full cursor-se-resize z-25 pointer-events-auto shadow-sm"
+                                  title="Arrastra para redimensionar la forma"
                                 />
                               )}
                             </div>
@@ -1140,7 +1316,7 @@ export default function Editor() {
                 )}
               </div>
 
-              {/* Navegación de página */}
+              {/* Paginación */}
               <div className="flex items-center gap-4">
                 <button
                   onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
