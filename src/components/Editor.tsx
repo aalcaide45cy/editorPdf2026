@@ -18,7 +18,8 @@ import {
   Square,
   Circle,
   Edit3,
-  Undo
+  Undo,
+  Redo
 } from 'lucide-react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { PDFDocument, rgb, degrees, StandardFonts } from 'pdf-lib';
@@ -188,7 +189,22 @@ export default function Editor() {
   // Original PDF text detection
   const [isEditTextMode, setIsEditTextMode] = useState(false);
   const [originalTextItems, setOriginalTextItems] = useState<OriginalTextItem[]>([]);
-  const [hiddenOriginalTextIds, setHiddenOriginalTextIds] = useState<Set<string>>(new Set());
+  
+  // Redo stack
+  const [redoHistory, setRedoHistory] = useState<{[page: number]: EditorElement[]}[]>([]);
+
+  // Derived hidden original text IDs
+  const hiddenOriginalTextIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    Object.values(elements).forEach((pageEls) => {
+      pageEls.forEach((el) => {
+        if (el.type === 'text' && el.originalTextId) {
+          ids.add(el.originalTextId);
+        }
+      });
+    });
+    return ids;
+  }, [elements]);
 
   // Inline text editing states
   const [editingTextElementId, setEditingTextElementId] = useState<string | null>(null);
@@ -209,6 +225,7 @@ export default function Editor() {
   const elementSizeRef = useRef({ width: 0, height: 0 });
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasWrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -217,15 +234,47 @@ export default function Editor() {
   const pushToHistory = (newElements: {[page: number]: EditorElement[]}) => {
     setHistory((prev) => [...prev, elements]);
     setElements(newElements);
+    setRedoHistory([]);
   };
 
   const handleUndo = () => {
     if (history.length === 0) return;
     const previousElements = history[history.length - 1];
+    setRedoHistory((prev) => [...prev, elements]);
     setElements(previousElements);
     setHistory((prev) => prev.slice(0, -1));
-    setSelectedElementId(null);
-    setEditingTextElementId(null);
+    
+    if (selectedElementId) {
+      const pageEls = previousElements[currentPage] || [];
+      const exists = pageEls.some((el) => el.id === selectedElementId);
+      if (!exists) {
+        setSelectedElementId(null);
+        setEditingTextElementId(null);
+      }
+    } else {
+      setSelectedElementId(null);
+      setEditingTextElementId(null);
+    }
+  };
+
+  const handleRedo = () => {
+    if (redoHistory.length === 0) return;
+    const nextElements = redoHistory[redoHistory.length - 1];
+    setHistory((prev) => [...prev, elements]);
+    setElements(nextElements);
+    setRedoHistory((prev) => prev.slice(0, -1));
+    
+    if (selectedElementId) {
+      const pageEls = nextElements[currentPage] || [];
+      const exists = pageEls.some((el) => el.id === selectedElementId);
+      if (!exists) {
+        setSelectedElementId(null);
+        setEditingTextElementId(null);
+      }
+    } else {
+      setSelectedElementId(null);
+      setEditingTextElementId(null);
+    }
   };
 
   // Evitar salida accidental
@@ -251,7 +300,6 @@ export default function Editor() {
   useEffect(() => {
     if (!pdfDocProxy) {
       setOriginalTextItems([]);
-      setHiddenOriginalTextIds(new Set());
       return;
     }
 
@@ -297,7 +345,6 @@ export default function Editor() {
                            fontName.includes('w900') || 
                            fontName.includes('w600') || 
                            fontName.includes('semibold') ||
-                           fontName.includes('medium') ||
                            fontName.includes('-bd') ||
                            fontName.endsWith('bd') ||
                            fontName.includes('demi');
@@ -327,7 +374,6 @@ export default function Editor() {
           });
         
         setOriginalTextItems(items);
-        setHiddenOriginalTextIds(new Set());
       } catch (err) {
         console.error('Error cargando textos originales:', err);
       }
@@ -372,6 +418,46 @@ export default function Editor() {
       console.error('Error rendering page:', error);
     }
   };
+
+  const adjustZoomToFitWidth = async (docProxy: pdfjsLib.PDFDocumentProxy) => {
+    if (!canvasWrapperRef.current) return;
+    try {
+      const page = await docProxy.getPage(currentPage);
+      const rotation = rotations[currentPage] || 0;
+      
+      const viewport = page.getViewport({ scale: 1.0, rotation });
+      const pageWidth = viewport.width;
+
+      const wrapperWidth = canvasWrapperRef.current.clientWidth;
+      const targetWidth = Math.max(200, wrapperWidth - 48);
+
+      let calculatedZoom = (targetWidth * 2) / pageWidth;
+      calculatedZoom = Number(calculatedZoom.toFixed(1));
+      calculatedZoom = Math.max(0.4, Math.min(3.0, calculatedZoom));
+      
+      setZoom(calculatedZoom);
+    } catch (err) {
+      console.error('Error adjusting zoom to fit width:', err);
+    }
+  };
+
+  // Adjust zoom to fit width when PDF is loaded, page changes, or rotations change
+  useEffect(() => {
+    if (!pdfDocProxy) return;
+    adjustZoomToFitWidth(pdfDocProxy);
+  }, [pdfDocProxy, currentPage, rotations[currentPage]]);
+
+  // Listen to window resize to dynamically update zoom
+  useEffect(() => {
+    if (!pdfDocProxy) return;
+    
+    const handleResize = () => {
+      adjustZoomToFitWidth(pdfDocProxy);
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [pdfDocProxy, currentPage, rotations[currentPage]]);
 
   // Cargar PDF en memoria
   const handleFileChange = async (file: File) => {
@@ -696,10 +782,6 @@ export default function Editor() {
       ...elements,
       [currentPage]: [...pageElements, whiteoutShape, editableText],
     });
-
-    const newHidden = new Set(hiddenOriginalTextIds);
-    newHidden.add(item.id);
-    setHiddenOriginalTextIds(newHidden);
 
     setSelectedElementId(textId);
     handleStartTextEdit(editableText); // Abrir edición inline automáticamente
@@ -1048,12 +1130,6 @@ export default function Editor() {
       const timestamp = selectedElementId.replace('text-edit-', '');
       const whiteoutId = `whiteout-orig-${timestamp}`;
       updated = updated.filter((el) => el.id !== whiteoutId);
-      
-      if (elementToDelete && elementToDelete.type === 'text' && elementToDelete.originalTextId) {
-        const newHidden = new Set(hiddenOriginalTextIds);
-        newHidden.delete(elementToDelete.originalTextId);
-        setHiddenOriginalTextIds(newHidden);
-      }
     }
     
     pushToHistory({ ...elements, [currentPage]: updated });
@@ -1368,6 +1444,60 @@ export default function Editor() {
                 <Undo className="h-4 w-4" />
                 <span>Deshacer</span>
               </button>
+
+              {/* Botón Rehacer */}
+              <button
+                onClick={handleRedo}
+                disabled={redoHistory.length === 0}
+                className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-semibold transition-all disabled:opacity-40 border border-slate-200 dark:border-slate-800 shadow-sm"
+                title="Rehacer acción deshecha"
+              >
+                <Redo className="h-4 w-4" />
+                <span>Rehacer</span>
+              </button>
+
+              <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1" />
+
+              {/* Navegación de Páginas */}
+              <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-750">
+                <button
+                  onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+                  disabled={currentPage === 1}
+                  className="p-1 hover:bg-white dark:hover:bg-slate-700 rounded-lg text-slate-700 dark:text-slate-200 disabled:opacity-40 transition-all"
+                  title="Página Anterior"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                
+                <select
+                  value={currentPage}
+                  onChange={(e) => setCurrentPage(Number(e.target.value))}
+                  className="bg-transparent text-xs font-bold text-slate-700 dark:text-slate-250 outline-none cursor-pointer px-1.5 py-0.5"
+                >
+                  {Array.from({ length: numPages }).map((_, index) => {
+                    const pageNum = index + 1;
+                    const isDel = deletedPages.has(pageNum);
+                    const rot = rotations[pageNum];
+                    let label = `Pág. ${pageNum} / ${numPages}`;
+                    if (isDel) label += ' (Eliminada)';
+                    if (rot) label += ` (${rot}°)`;
+                    return (
+                      <option key={pageNum} value={pageNum} className="dark:bg-slate-900 text-slate-900 dark:text-slate-100">
+                        {label}
+                      </option>
+                    );
+                  })}
+                </select>
+
+                <button
+                  onClick={() => setCurrentPage(Math.min(numPages, currentPage + 1))}
+                  disabled={currentPage === numPages}
+                  className="p-1 hover:bg-white dark:hover:bg-slate-700 rounded-lg text-slate-700 dark:text-slate-200 disabled:opacity-40 transition-all"
+                  title="Siguiente Página"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
             </div>
 
             {/* Ajustes de Elementos Seleccionados en la Barra Superior */}
@@ -1617,42 +1747,7 @@ export default function Editor() {
           </div>
 
           {/* MAIN AREA */}
-          <div className="flex flex-col lg:flex-row gap-6 items-start">
-            
-            {/* MINIATURAS */}
-            <div className="w-full lg:w-60 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 flex lg:flex-col gap-4 overflow-x-auto lg:overflow-x-visible lg:max-h-[600px] lg:overflow-y-auto transition-colors shadow-sm">
-              <div className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-1 hidden lg:block select-none font-mono">
-                PÁGINAS DEL DOCUMENTO
-              </div>
-              {Array.from({ length: numPages }).map((_, index) => {
-                const pageNum = index + 1;
-                const isCurrent = pageNum === currentPage;
-                const isDeleted = deletedPages.has(pageNum);
-                
-                return (
-                  <button
-                    key={pageNum}
-                    onClick={() => setCurrentPage(pageNum)}
-                    className={`flex items-center justify-between p-2.5 rounded-xl border text-left transition-all min-w-[120px] lg:min-w-0 ${
-                      isCurrent 
-                        ? 'border-emerald-500 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400' 
-                        : isDeleted
-                        ? 'border-red-200 dark:border-red-950/20 bg-red-500/5 text-red-500 opacity-60'
-                        : 'border-slate-100 dark:border-slate-850 hover:bg-slate-50 dark:hover:bg-slate-800'
-                    }`}
-                  >
-                    <span className="text-sm font-semibold">Pág. {pageNum}</span>
-                    <div className="flex items-center gap-1">
-                      {isDeleted && <span className="text-[10px] bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 px-1.5 py-0.5 rounded font-bold">DEL</span>}
-                      {rotations[pageNum] ? <span className="text-[10px] bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 px-1.5 py-0.5 rounded font-bold">{rotations[pageNum]}°</span> : null}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* ÁREA DEL LIENZO */}
-            <div className="flex-grow flex flex-col items-center gap-4 w-full">
+          <div className="w-full flex flex-col items-center gap-4">
               
               <div className="w-full flex items-center justify-between bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-4 py-2.5 rounded-2xl shadow-sm transition-colors">
                 <div className="flex items-center gap-3">
@@ -1700,6 +1795,7 @@ export default function Editor() {
 
               {/* CONTENEDOR DEL LIENZO */}
               <div 
+                ref={canvasWrapperRef}
                 className="relative overflow-auto border border-slate-200 dark:border-slate-800 rounded-3xl max-w-full bg-slate-100 dark:bg-slate-900/30 flex justify-center items-center p-4 min-h-[400px] w-full transition-colors"
                 onClick={(e) => {
                   if (wasElementClickRef.current) {
@@ -1802,7 +1898,9 @@ export default function Editor() {
                                     fontStyle: el.fontStyle || 'normal',
                                     width: `${Math.max(120, tempText.length * el.fontSize * (zoom / 2) * 0.56 + 24)}px`,
                                     willChange: 'left, top',
-                                    lineHeight: 'normal',
+                                    lineHeight: '1.2',
+                                    padding: '4px 8px',
+                                    border: 'none',
                                   }}
                                 />
 
@@ -1932,6 +2030,9 @@ export default function Editor() {
                                 whiteSpace: 'nowrap',
                                 willChange: 'left, top',
                                 touchAction: 'none',
+                                lineHeight: '1.2',
+                                padding: '4px 8px',
+                                border: 'none',
                               }}
                               title="Doble clic para editar. Arrastra para mover."
                             >
@@ -2030,27 +2131,6 @@ export default function Editor() {
                 )}
               </div>
 
-              {/* Paginación */}
-              <div className="flex items-center gap-4">
-                <button
-                  onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                  disabled={currentPage === 1}
-                  className="p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-700 dark:text-slate-200 disabled:opacity-40 transition-all shadow-sm animate-colors"
-                >
-                  <ChevronLeft className="h-5 w-5" />
-                </button>
-                <span className="text-xs font-bold text-slate-500 select-none">
-                  {currentPage} / {numPages}
-                </span>
-                <button
-                  onClick={() => setCurrentPage(Math.min(numPages, currentPage + 1))}
-                  disabled={currentPage === numPages}
-                  className="p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-700 dark:text-slate-200 disabled:opacity-40 transition-all shadow-sm animate-colors"
-                >
-                  <ChevronRight className="h-5 w-5" />
-                </button>
-              </div>
-            </div>
           </div>
 
           {/* BOTONES INFERIORES */}
