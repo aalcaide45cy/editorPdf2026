@@ -194,6 +194,7 @@ export default function Editor() {
   const [editingTextElementId, setEditingTextElementId] = useState<string | null>(null);
   const [tempText, setTempText] = useState('');
   const wasElementClickRef = useRef(false);
+  const [activeGuides, setActiveGuides] = useState<{ x: number | null, y: number | null }>({ x: null, y: null });
 
   // Interactive tools states
   const [showSignaturePad, setShowSignaturePad] = useState(false);
@@ -500,6 +501,9 @@ export default function Editor() {
 
   // Añadir elementos de edición
   const addTextElement = () => {
+    if (editingTextElementId) {
+      handleConfirmTextEdit(editingTextElementId);
+    }
     const newTextId = `text-${Date.now()}`;
     const newText: TextElement = {
       id: newTextId,
@@ -523,6 +527,9 @@ export default function Editor() {
   };
 
   const addSignatureElement = (dataUrl: string) => {
+    if (editingTextElementId) {
+      handleConfirmTextEdit(editingTextElementId);
+    }
     const newSig: ImageElement = {
       id: `sig-${Date.now()}`,
       type: 'image',
@@ -542,6 +549,9 @@ export default function Editor() {
   };
 
   const addShapeElement = (shapeType: 'rect' | 'circle') => {
+    if (editingTextElementId) {
+      handleConfirmTextEdit(editingTextElementId);
+    }
     const newShape: ShapeElement = {
       id: `shape-${Date.now()}`,
       type: 'shape',
@@ -569,6 +579,9 @@ export default function Editor() {
       const reader = new FileReader();
       reader.onload = (event) => {
         if (event.target?.result) {
+          if (editingTextElementId) {
+            handleConfirmTextEdit(editingTextElementId);
+          }
           const newImg: ImageElement = {
             id: `img-${Date.now()}`,
             type: 'image',
@@ -590,8 +603,46 @@ export default function Editor() {
     }
   };
 
+  const alignSelectedElement = (type: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom') => {
+    if (!selectedElementId) return;
+    const pageElements = elements[currentPage] || [];
+    const currentEl = pageElements.find(item => item.id === selectedElementId);
+    if (!currentEl) return;
+
+    let elWidth = 0.15;
+    let elHeight = 0.04;
+    if (currentEl.type === 'text') {
+      elWidth = Math.min(0.8, (currentEl.text.length * currentEl.fontSize * 0.5) / 595);
+      elHeight = currentEl.fontSize / 842;
+    } else if ('width' in currentEl && 'height' in currentEl) {
+      elWidth = currentEl.width;
+      elHeight = currentEl.height;
+    }
+
+    let newX = currentEl.x;
+    let newY = currentEl.y;
+
+    if (type === 'left') newX = 0.05;
+    else if (type === 'center') newX = 0.5 - elWidth / 2;
+    else if (type === 'right') newX = 0.95 - elWidth;
+    else if (type === 'top') newY = 0.05;
+    else if (type === 'middle') newY = 0.5 - elHeight / 2;
+    else if (type === 'bottom') newY = 0.95 - elHeight;
+
+    const updated = pageElements.map((el) => {
+      if (el.id === selectedElementId) {
+        return { ...el, x: newX, y: newY };
+      }
+      return el;
+    });
+    pushToHistory({ ...elements, [currentPage]: updated });
+  };
+
   // Simular la edición del texto original con preservación de formato completo
   const handleEditOriginalText = (item: OriginalTextItem) => {
+    if (editingTextElementId) {
+      handleConfirmTextEdit(editingTextElementId);
+    }
     let detectedTextColor = '#000000';
     let detectedBgColor = '#ffffff';
 
@@ -657,6 +708,12 @@ export default function Editor() {
   // --- LÓGICA DE ARRASTRE Y REDIMENSIÓN DE ALTO RENDIMIENTO (SIN LAG) ---
   const handleElementPointerDown = (e: React.PointerEvent<HTMLDivElement>, element: EditorElement) => {
     e.stopPropagation();
+    
+    // Si ya estábamos editando otro texto, guardar sus cambios primero
+    if (editingTextElementId && editingTextElementId !== element.id) {
+      handleConfirmTextEdit(editingTextElementId);
+    }
+
     setSelectedElementId(element.id);
     wasElementClickRef.current = true;
     
@@ -713,17 +770,112 @@ export default function Editor() {
     const rect = container.getBoundingClientRect();
     const currentX = e.clientX - rect.left;
     const currentY = e.clientY - rect.top;
+    const pageElements = elements[currentPage] || [];
 
     if (isDraggingRef.current) {
       let newX = (currentX - dragOffsetRef.current.x) / rect.width;
       let newY = (currentY - dragOffsetRef.current.y) / rect.height;
-      newX = Math.max(0, Math.min(1, newX));
-      newY = Math.max(0, Math.min(1, newY));
+
+      // Obtener dimensiones estimadas del elemento actual para limitar y hacer snapping
+      const currentEl = pageElements.find(item => item.id === selectedElementId);
+      let elWidth = 0.15;
+      let elHeight = 0.04;
+      if (currentEl) {
+        if (currentEl.type === 'text') {
+          elWidth = Math.min(0.8, (currentEl.text.length * currentEl.fontSize * 0.5) / 595);
+          elHeight = currentEl.fontSize / 842;
+        } else if ('width' in currentEl && 'height' in currentEl) {
+          elWidth = currentEl.width;
+          elHeight = currentEl.height;
+        }
+      }
+
+      newX = Math.max(0, Math.min(1 - elWidth, newX));
+      newY = Math.max(0, Math.min(1 - elHeight, newY));
+
+      // LÓGICA DE SNAPPING E INTEL-GUIDES
+      const snapThreshold = 0.012; // 1.2% de la página
+      let snappedX: number | null = null;
+      let snappedY: number | null = null;
+
+      const currentCenterX = newX + elWidth / 2;
+      const currentCenterY = newY + elHeight / 2;
+      const currentRight = newX + elWidth;
+      const currentBottom = newY + elHeight;
+
+      // Snap vertical (guías en eje X)
+      if (Math.abs(currentCenterX - 0.5) < snapThreshold) {
+        newX = 0.5 - elWidth / 2;
+        snappedX = 0.5;
+      } else {
+        for (const other of pageElements) {
+          if (other.id === selectedElementId) continue;
+          let otherWidth = 0.15;
+          if (other.type === 'text') {
+            otherWidth = Math.min(0.8, (other.text.length * other.fontSize * 0.5) / 595);
+          } else if ('width' in other) {
+            otherWidth = other.width;
+          }
+          const otherRight = other.x + otherWidth;
+          const otherCenterX = other.x + otherWidth / 2;
+
+          if (Math.abs(newX - other.x) < snapThreshold) {
+            newX = other.x;
+            snappedX = other.x;
+            break;
+          }
+          if (Math.abs(currentCenterX - otherCenterX) < snapThreshold) {
+            newX = otherCenterX - elWidth / 2;
+            snappedX = otherCenterX;
+            break;
+          }
+          if (Math.abs(currentRight - otherRight) < snapThreshold) {
+            newX = otherRight - elWidth;
+            snappedX = otherRight;
+            break;
+          }
+        }
+      }
+
+      // Snap horizontal (guías en eje Y)
+      if (Math.abs(currentCenterY - 0.5) < snapThreshold) {
+        newY = 0.5 - elHeight / 2;
+        snappedY = 0.5;
+      } else {
+        for (const other of pageElements) {
+          if (other.id === selectedElementId) continue;
+          let otherHeight = 0.04;
+          if (other.type === 'text') {
+            otherHeight = other.fontSize / 842;
+          } else if ('height' in other) {
+            otherHeight = other.height;
+          }
+          const otherBottom = other.y + otherHeight;
+          const otherCenterY = other.y + otherHeight / 2;
+
+          if (Math.abs(newY - other.y) < snapThreshold) {
+            newY = other.y;
+            snappedY = other.y;
+            break;
+          }
+          if (Math.abs(currentCenterY - otherCenterY) < snapThreshold) {
+            newY = otherCenterY - elHeight / 2;
+            snappedY = otherCenterY;
+            break;
+          }
+          if (Math.abs(currentBottom - otherBottom) < snapThreshold) {
+            newY = otherBottom - elHeight;
+            snappedY = otherBottom;
+            break;
+          }
+        }
+      }
       
       elementCoordsRef.current = { x: newX, y: newY };
       
       dragTargetRef.current.style.left = `${newX * 100}%`;
       dragTargetRef.current.style.top = `${newY * 100}%`;
+      setActiveGuides({ x: snappedX, y: snappedY });
       
     } else if (isResizingRef.current) {
       const deltaX = currentX - resizeDataRef.current.startX;
@@ -732,7 +884,7 @@ export default function Editor() {
       let newWidth = resizeDataRef.current.width + (deltaX / rect.width);
       let newHeight = resizeDataRef.current.height + (deltaY / rect.height);
       
-      const el = (elements[currentPage] || []).find(item => item.id === selectedElementId);
+      const el = pageElements.find(item => item.id === selectedElementId);
       if (el) {
         newWidth = Math.max(0.01, Math.min(1 - el.x, newWidth));
         newHeight = Math.max(0.01, Math.min(1 - el.y, newHeight));
@@ -780,6 +932,7 @@ export default function Editor() {
     isDraggingRef.current = false;
     isResizingRef.current = false;
     dragTargetRef.current = null;
+    setActiveGuides({ x: null, y: null });
   };
 
   // Modificaciones de propiedades con pushToHistory
@@ -1290,6 +1443,25 @@ export default function Editor() {
 
                 <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
 
+                <select
+                  onChange={(e) => {
+                    alignSelectedElement(e.target.value as any);
+                    e.target.value = '';
+                  }}
+                  defaultValue=""
+                  className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200 font-semibold"
+                >
+                  <option value="" disabled>Alinear...</option>
+                  <option value="left">A la Izquierda</option>
+                  <option value="center">Al Centro Horizontal</option>
+                  <option value="right">A la Derecha</option>
+                  <option value="top">Arriba</option>
+                  <option value="middle">Al Centro Vertical</option>
+                  <option value="bottom">Abajo</option>
+                </select>
+
+                <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
+
                 <button
                   onClick={() => handleStartTextEdit(selectedElement)}
                   className="bg-emerald-500 hover:bg-emerald-600 text-white text-xs px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm"
@@ -1360,9 +1532,58 @@ export default function Editor() {
                   <span className="text-[10px] font-semibold w-7">{Math.round(selectedElement.opacity * 100)}%</span>
                 </div>
 
+                <select
+                  onChange={(e) => {
+                    alignSelectedElement(e.target.value as any);
+                    e.target.value = '';
+                  }}
+                  defaultValue=""
+                  className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200 font-semibold"
+                >
+                  <option value="" disabled>Alinear...</option>
+                  <option value="left">A la Izquierda</option>
+                  <option value="center">Al Centro Horizontal</option>
+                  <option value="right">A la Derecha</option>
+                  <option value="top">Arriba</option>
+                  <option value="middle">Al Centro Vertical</option>
+                  <option value="bottom">Abajo</option>
+                </select>
+
                 <button
                   onClick={deleteSelectedElement}
                   className="text-red-500 hover:text-red-600 hover:bg-red-500/10 p-1.5 rounded-lg transition-colors"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+
+            {/* Ajustes de Imágenes */}
+            {selectedElement && selectedElement.type === 'image' && (
+              <div className="flex flex-wrap items-center gap-3 bg-slate-50 dark:bg-slate-950 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-850">
+                <span className="text-xs text-slate-400 font-bold select-none">Imagen:</span>
+                
+                <select
+                  onChange={(e) => {
+                    alignSelectedElement(e.target.value as any);
+                    e.target.value = '';
+                  }}
+                  defaultValue=""
+                  className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200 font-semibold"
+                >
+                  <option value="" disabled>Alinear...</option>
+                  <option value="left">A la Izquierda</option>
+                  <option value="center">Al Centro Horizontal</option>
+                  <option value="right">A la Derecha</option>
+                  <option value="top">Arriba</option>
+                  <option value="middle">Al Centro Vertical</option>
+                  <option value="bottom">Abajo</option>
+                </select>
+
+                <button
+                  onClick={deleteSelectedElement}
+                  className="text-red-500 hover:text-red-605 hover:bg-red-500/10 p-1.5 rounded-lg transition-colors"
+                  title="Eliminar imagen"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
@@ -1688,7 +1909,7 @@ export default function Editor() {
                                 e.stopPropagation();
                                 handleStartTextEdit(el);
                               }}
-                              className={`absolute cursor-move select-none pointer-events-auto px-2 py-1 rounded transition-all group ${
+                              className={`absolute cursor-move select-none pointer-events-auto px-2 py-1 rounded transition-[outline,background-color] group ${
                                 isSel 
                                   ? 'outline outline-2 outline-emerald-500 bg-white/90 dark:bg-slate-900/90 shadow-md z-30 font-sans' 
                                   : 'hover:bg-slate-500/10 hover:outline hover:outline-1 hover:outline-slate-400'
@@ -1718,7 +1939,7 @@ export default function Editor() {
                               onPointerDown={(e) => handleElementPointerDown(e, el)}
                               onPointerUp={(e) => e.stopPropagation()}
                               onClick={(e) => e.stopPropagation()}
-                              className={`absolute cursor-move pointer-events-auto transition-all ${
+                              className={`absolute cursor-move pointer-events-auto transition-[outline] ${
                                 isSel 
                                   ? 'outline outline-2 outline-emerald-500 shadow-md z-30' 
                                   : 'hover:outline hover:outline-1 hover:outline-slate-400'
@@ -1754,7 +1975,7 @@ export default function Editor() {
                               onPointerDown={(e) => handleElementPointerDown(e, el)}
                               onPointerUp={(e) => e.stopPropagation()}
                               onClick={(e) => e.stopPropagation()}
-                              className={`absolute cursor-move pointer-events-auto transition-all ${
+                              className={`absolute cursor-move pointer-events-auto transition-[outline] ${
                                 isSel 
                                   ? 'outline outline-2 outline-emerald-500 shadow-md z-30' 
                                   : 'hover:outline hover:outline-1 hover:outline-slate-400'
@@ -1784,6 +2005,20 @@ export default function Editor() {
                         }
                         return null;
                       })}
+
+                      {/* 3. Guías de alineación inteligentes */}
+                      {activeGuides.x !== null && (
+                        <div 
+                          className="absolute top-0 bottom-0 border-l border-dashed border-purple-500 z-35 pointer-events-none"
+                          style={{ left: `${activeGuides.x * 100}%` }}
+                        />
+                      )}
+                      {activeGuides.y !== null && (
+                        <div 
+                          className="absolute left-0 right-0 border-t border-dashed border-purple-500 z-35 pointer-events-none"
+                          style={{ top: `${activeGuides.y * 100}%` }}
+                        />
+                      )}
                     </div>
                   </div>
                 )}
