@@ -180,7 +180,7 @@ interface OriginalTextItem {
   underline?: boolean;
 }
 
-// Analizar colores de texto y fondo leyendo píxeles del canvas con límites de seguridad estrictos
+// Analizar colores de texto y fondo leyendo píxeles del canvas con límites de seguridad estrictos y mezclado sobre blanco
 const detectTextAndBgColor = (
   canvas: HTMLCanvasElement,
   x: number,
@@ -207,17 +207,38 @@ const detectTextAndBgColor = (
     const imgData = ctx.getImageData(pxX, pxY, pxW, pxH);
     const data = imgData.data;
 
+    // Helper para mezclar un píxel sobre fondo blanco (comportamiento por defecto del PDF)
+    const getPixelColor = (idx: number) => {
+      const r = data[idx];
+      const g = data[idx + 1];
+      const b = data[idx + 2];
+      const a = data[idx + 3];
+      const alpha = a / 255;
+      return [
+        Math.round(r * alpha + 255 * (1 - alpha)),
+        Math.round(g * alpha + 255 * (1 - alpha)),
+        Math.round(b * alpha + 255 * (1 - alpha))
+      ];
+    };
+
     // Muestrear las esquinas para determinar el color de fondo aproximado
-    const corners = [
+    const cornerIndices = [
       0, // superior izquierda
       Math.min(data.length - 4, (pxW - 1) * 4), // superior derecha
       Math.min(data.length - 4, (pxH - 1) * pxW * 4), // inferior izquierda
       data.length - 4 // inferior derecha
     ];
 
-    const bgR = Math.round(corners.reduce((sum, idx) => sum + data[idx], 0) / 4);
-    const bgG = Math.round(corners.reduce((sum, idx) => sum + data[idx + 1], 0) / 4);
-    const bgB = Math.round(corners.reduce((sum, idx) => sum + data[idx + 2], 0) / 4);
+    let bgRSum = 0, bgGSum = 0, bgBSum = 0;
+    for (const idx of cornerIndices) {
+      const [r, g, b] = getPixelColor(idx);
+      bgRSum += r;
+      bgGSum += g;
+      bgBSum += b;
+    }
+    const bgR = Math.round(bgRSum / 4);
+    const bgG = Math.round(bgGSum / 4);
+    const bgB = Math.round(bgBSum / 4);
 
     const toHex = (c: number) => c.toString(16).padStart(2, '0');
     const bgColor = `#${toHex(bgR)}${toHex(bgG)}${toHex(bgB)}`;
@@ -225,15 +246,9 @@ const detectTextAndBgColor = (
     // Buscar píxeles que difieran del fondo para obtener el color de letra
     let rSum = 0, gSum = 0, bSum = 0, count = 0;
     for (let i = 0; i < data.length; i += 4) {
-      const r = data[i];
-      const g = data[i + 1];
-      const b = data[i + 2];
-      const a = data[i + 3];
-
-      if (a < 50) continue; // ignorar transparentes
-
+      const [r, g, b] = getPixelColor(i);
       const diff = Math.abs(r - bgR) + Math.abs(g - bgG) + Math.abs(b - bgB);
-      if (diff > 30) { // Umbral de contraste más sensible (30) para trazos finos
+      if (diff > 30) {
         rSum += r;
         gSum += g;
         bSum += b;
