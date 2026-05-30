@@ -102,8 +102,20 @@ const fetchGoogleFontTtf = async (fontName: string): Promise<ArrayBuffer | null>
   }
 };
 
+const cleanFontSubsetPrefix = (name: string): string => {
+  if (!name) return name;
+  const plusIdx = name.indexOf('+');
+  return plusIdx !== -1 ? name.slice(plusIdx + 1) : name;
+};
+
 const getCssFontFamily = (el: { pdfFontName?: string; fontFamily?: string }) => {
-  if (el.pdfFontName) return el.pdfFontName;
+  if (el.pdfFontName) {
+    const cleaned = cleanFontSubsetPrefix(el.pdfFontName).trim();
+    if (cleaned.includes(' ') && !cleaned.startsWith('"') && !cleaned.startsWith("'")) {
+      return `"${cleaned}", sans-serif`;
+    }
+    return cleaned;
+  }
   if (!el.fontFamily) return 'Helvetica, Arial, sans-serif';
   if (el.fontFamily === 'sans-serif') return 'Helvetica, Arial, sans-serif';
   if (el.fontFamily === 'serif') return 'Georgia, "Times New Roman", serif';
@@ -524,7 +536,7 @@ export default function Editor() {
               fontWeight,
               fontStyle: isItalic ? 'italic' : 'normal',
               fontFamily,
-              pdfFontName: fontStyleObj ? fontStyleObj.fontFamily : item.fontName,
+              pdfFontName: cleanFontSubsetPrefix(fontStyleObj ? fontStyleObj.fontFamily : item.fontName),
             };
           });
         
@@ -2242,7 +2254,7 @@ export default function Editor() {
                                     if (e.key === 'Enter') handleConfirmTextEdit(el.id);
                                     if (e.key === 'Escape') handleCancelTextEdit();
                                   }}
-                                  className="absolute pointer-events-auto rounded outline outline-2 outline-emerald-500 bg-transparent z-45 font-sans border-0 m-0 focus:outline-emerald-500 focus:ring-0"
+                                  className="absolute pointer-events-auto rounded outline outline-2 outline-emerald-500 bg-transparent z-45 border-0 m-0 focus:outline-emerald-500 focus:ring-0"
                                   style={{
                                     left: `${el.x * 100}%`,
                                     top: `${el.y * 100}%`,
@@ -2253,11 +2265,16 @@ export default function Editor() {
                                     fontStyle: el.fontStyle || 'normal',
                                     textDecoration: el.underline ? 'underline' : 'none',
                                     width: `${Math.max(120, tempText.length * el.fontSize * (zoom / 2) * 0.56 + 10)}px`,
+                                    height: `${el.fontSize * (zoom / 2) * 1.15}px`,
                                     willChange: 'left, top',
                                     lineHeight: '1.1',
                                     padding: '0px',
+                                    margin: '0px',
                                     outlineOffset: '3px',
                                     border: 'none',
+                                    boxSizing: 'border-box',
+                                    verticalAlign: 'baseline',
+                                    textIndent: '0px',
                                   }}
                                 />
 
@@ -2448,7 +2465,7 @@ export default function Editor() {
                               }}
                               className={`absolute cursor-move select-none pointer-events-auto rounded transition-[outline,background-color] group ${
                                 isSel 
-                                  ? 'outline outline-2 outline-emerald-500 bg-transparent z-30 font-sans' 
+                                  ? 'outline outline-2 outline-emerald-500 bg-transparent z-30' 
                                   : 'hover:bg-slate-500/10 hover:outline hover:outline-1 hover:outline-slate-400'
                               }`}
                               style={{
@@ -2460,14 +2477,19 @@ export default function Editor() {
                                 fontWeight: mapFontWeightToCss(el.fontWeight),
                                 fontStyle: el.fontStyle || 'normal',
                                 textDecoration: el.underline ? 'underline' : 'none',
+                                height: `${el.fontSize * (zoom / 2) * 1.15}px`,
                                 transform: 'translate(0, 0)',
                                 whiteSpace: 'nowrap',
                                 willChange: 'left, top',
                                 touchAction: 'none',
                                 lineHeight: '1.1',
                                 padding: '0px',
+                                margin: '0px',
                                 outlineOffset: '3px',
                                 border: 'none',
+                                boxSizing: 'border-box',
+                                verticalAlign: 'baseline',
+                                textIndent: '0px',
                               }}
                               title="Doble clic para editar. Arrastra para mover."
                             >
