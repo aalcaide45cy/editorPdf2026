@@ -30,6 +30,87 @@ if (typeof window !== 'undefined') {
   pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js`;
 }
 
+const GOOGLE_FONTS = [
+  { name: 'Inter', category: 'Sans-Serif' },
+  { name: 'Roboto', category: 'Sans-Serif' },
+  { name: 'Poppins', category: 'Sans-Serif' },
+  { name: 'Montserrat', category: 'Sans-Serif' },
+  { name: 'Lato', category: 'Sans-Serif' },
+  { name: 'Open Sans', category: 'Sans-Serif' },
+  { name: 'Raleway', category: 'Sans-Serif' },
+  { name: 'Nunito', category: 'Sans-Serif' },
+  { name: 'Oswald', category: 'Sans-Serif' },
+  { name: 'Ubuntu', category: 'Sans-Serif' },
+  { name: 'Playfair Display', category: 'Serif' },
+  { name: 'Merriweather', category: 'Serif' },
+  { name: 'Lora', category: 'Serif' },
+  { name: 'PT Serif', category: 'Serif' },
+  { name: 'EB Garamond', category: 'Serif' },
+  { name: 'Crimson Text', category: 'Serif' },
+  { name: 'Libre Baskerville', category: 'Serif' },
+  { name: 'Cinzel', category: 'Serif' },
+  { name: 'Fira Code', category: 'Monospace' },
+  { name: 'JetBrains Mono', category: 'Monospace' },
+  { name: 'Source Code Pro', category: 'Monospace' },
+  { name: 'Pacifico', category: 'Script' },
+  { name: 'Caveat', category: 'Script' },
+  { name: 'Dancing Script', category: 'Script' },
+];
+
+const fetchGoogleFontTtf = async (fontName: string): Promise<ArrayBuffer | null> => {
+  try {
+    const cleanName = fontName.replace(/\s+/g, '').toLowerCase();
+    const cleanFontName = fontName.replace(/\s+/g, '');
+    
+    // OFL license
+    let fontUrl = `https://raw.githubusercontent.com/google/fonts/main/ofl/${cleanName}/${cleanFontName}-Regular.ttf`;
+    let res = await fetch(fontUrl);
+    if (!res.ok) {
+      // Apache license
+      fontUrl = `https://raw.githubusercontent.com/google/fonts/main/apache/${cleanName}/${cleanFontName}-Regular.ttf`;
+      res = await fetch(fontUrl);
+    }
+    if (!res.ok) {
+      // UFL license
+      fontUrl = `https://raw.githubusercontent.com/google/fonts/main/ufl/${cleanName}/${cleanFontName}-Regular.ttf`;
+      res = await fetch(fontUrl);
+    }
+    
+    if (res.ok) {
+      return await res.arrayBuffer();
+    }
+    
+    // Fallback: parse font family WOFF/TTF from CSS API
+    const cssUrl = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(fontName)}&display=swap`;
+    const cssRes = await fetch(cssUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64; rv:40.0) Gecko/20100101 Firefox/40.1'
+      }
+    });
+    const cssText = await cssRes.text();
+    const match = cssText.match(/url\((https:\/\/[^)]+\.ttf)\)/) || cssText.match(/url\((https:\/\/[^)]+\.otf)\)/) || cssText.match(/url\((https:\/\/[^)]+)\)/);
+    if (match) {
+      const fbRes = await fetch(match[1]);
+      if (fbRes.ok) {
+        return await fbRes.arrayBuffer();
+      }
+    }
+    return null;
+  } catch (err) {
+    console.error('Error fetching font TTF:', fontName, err);
+    return null;
+  }
+};
+
+const getCssFontFamily = (el: { pdfFontName?: string; fontFamily?: string }) => {
+  if (el.pdfFontName) return el.pdfFontName;
+  if (!el.fontFamily) return 'Helvetica, Arial, sans-serif';
+  if (el.fontFamily === 'sans-serif') return 'Helvetica, Arial, sans-serif';
+  if (el.fontFamily === 'serif') return 'Georgia, "Times New Roman", serif';
+  if (el.fontFamily === 'monospace') return 'Courier, "Courier New", monospace';
+  return `"${el.fontFamily}", Helvetica, Arial, sans-serif`;
+};
+
 interface TextElement {
   id: string;
   type: 'text';
@@ -40,9 +121,10 @@ interface TextElement {
   color: string;
   fontWeight?: 'bold' | 'normal' | 'medium' | 'semibold' | 'light';
   fontStyle?: 'italic' | 'normal';
-  fontFamily?: 'sans-serif' | 'serif' | 'monospace';
+  fontFamily?: string;
   originalTextId?: string;
   pdfFontName?: string;
+  underline?: boolean;
 }
 
 interface ImageElement {
@@ -81,8 +163,9 @@ interface OriginalTextItem {
   fontSize: number;
   fontWeight: 'bold' | 'normal' | 'medium' | 'semibold' | 'light';
   fontStyle: 'italic' | 'normal';
-  fontFamily: 'sans-serif' | 'serif' | 'monospace';
+  fontFamily: string;
   pdfFontName?: string;
+  underline?: boolean;
 }
 
 // Analizar colores de texto y fondo leyendo píxeles del canvas con límites de seguridad estrictos
@@ -228,6 +311,13 @@ export default function Editor() {
   const [showSignaturePad, setShowSignaturePad] = useState(false);
   const [showShapesDropdown, setShowShapesDropdown] = useState(false);
   const shapesDropdownRef = useRef<HTMLDivElement>(null);
+  const [showFontDropdown, setShowFontDropdown] = useState(false);
+  const [fontSearch, setFontSearch] = useState('');
+  const fontDropdownRef = useRef<HTMLDivElement>(null);
+  const [showInlineFontDropdown, setShowInlineFontDropdown] = useState(false);
+  const [inlineFontSearch, setInlineFontSearch] = useState('');
+  const inlineFontDropdownRef = useRef<HTMLDivElement>(null);
+  const activeRenderTaskRef = useRef<any>(null);
   
   // Drag & Resize references for HIGH PERFORMANCE (Zero Lag)
   const isDraggingRef = useRef(false);
@@ -304,15 +394,35 @@ export default function Editor() {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [pdfFile]);
 
-  // Cerrar el desplegable de formas al hacer clic fuera
+  // Cerrar desplegables al hacer clic fuera
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (shapesDropdownRef.current && !shapesDropdownRef.current.contains(e.target as Node)) {
         setShowShapesDropdown(false);
       }
+      if (fontDropdownRef.current && !fontDropdownRef.current.contains(e.target as Node)) {
+        setShowFontDropdown(false);
+      }
+      if (inlineFontDropdownRef.current && !inlineFontDropdownRef.current.contains(e.target as Node)) {
+        setShowInlineFontDropdown(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Cargar Google Fonts en bloque para vistas previas del editor
+  useEffect(() => {
+    const fontNamesLink = GOOGLE_FONTS.map(f => f.name.replace(/\s+/g, '+')).join('|');
+    const link = document.createElement('link');
+    link.id = 'google-fonts-preview-link';
+    link.rel = 'stylesheet';
+    link.href = `https://fonts.googleapis.com/css?family=${fontNamesLink}&display=swap`;
+    document.head.appendChild(link);
+    return () => {
+      const el = document.getElementById('google-fonts-preview-link');
+      if (el) document.head.removeChild(el);
+    };
   }, []);
 
   // Renderizar la página actual cuando cambia el PDF, la página actual o el zoom
@@ -359,7 +469,9 @@ export default function Editor() {
 
             // Extraer estilo desde textContent.styles para mayor precisión
             const fontStyleObj = textContent.styles[item.fontName];
-            const fontName = ((fontStyleObj ? fontStyleObj.fontFamily : '') || item.fontName || '').toLowerCase();
+            const fontNameFull = ((fontStyleObj ? fontStyleObj.fontFamily : '') || item.fontName || '').toLowerCase();
+            const plusIdx = fontNameFull.indexOf('+');
+            const fontName = plusIdx !== -1 ? fontNameFull.slice(plusIdx + 1) : fontNameFull;
             
             let fontWeight: 'bold' | 'normal' | 'medium' | 'semibold' | 'light' = 'normal';
             if (fontName.includes('black') || fontName.includes('heavy') || fontName.includes('w900')) {
@@ -428,6 +540,15 @@ export default function Editor() {
   const renderPage = async (pageNum: number) => {
     if (!pdfDocProxy || !canvasRef.current) return;
 
+    // Cancelar cualquier renderizado activo previo en este canvas para evitar carreras visuales
+    if (activeRenderTaskRef.current) {
+      try {
+        activeRenderTaskRef.current.cancel();
+      } catch (err) {
+        // Ignorar error al cancelar
+      }
+    }
+
     try {
       if (deletedPages.has(pageNum)) {
         const canvas = canvasRef.current;
@@ -454,11 +575,19 @@ export default function Editor() {
         viewport: viewport,
       };
 
-      await page.render(renderContext).promise;
+      const renderTask = page.render(renderContext);
+      activeRenderTaskRef.current = renderTask;
+
+      await renderTask.promise;
       
       setCanvasSize({ width: viewport.width / 2, height: viewport.height / 2 });
-    } catch (error) {
+    } catch (error: any) {
+      if (error && (error.name === 'HeadingStatus' || error.name === 'RenderingCancelledException' || error.message?.includes('cancelled'))) {
+        return; // Ignorar cancelaciones esperadas por concurrencia
+      }
       console.error('Error rendering page:', error);
+    } finally {
+      activeRenderTaskRef.current = null;
     }
   };
 
@@ -1122,11 +1251,24 @@ export default function Editor() {
     pushToHistory({ ...elements, [currentPage]: updated });
   };
 
-  const updateSelectedFontFamily = (family: 'sans-serif' | 'serif' | 'monospace') => {
+  const updateSelectedFontFamily = (family: string) => {
     const pageElements = elements[currentPage] || [];
     const updated = pageElements.map((el) => {
       if (el.id === selectedElementId && el.type === 'text') {
-        return { ...el, fontFamily: family } as TextElement;
+        const { pdfFontName, ...rest } = el;
+        return { ...rest, fontFamily: family } as TextElement;
+      }
+      return el;
+    });
+    pushToHistory({ ...elements, [currentPage]: updated });
+  };
+
+  const toggleSelectedUnderline = () => {
+    const pageElements = elements[currentPage] || [];
+    const updated = pageElements.map((el) => {
+      if (el.id === selectedElementId && el.type === 'text') {
+        const next = !el.underline;
+        return { ...el, underline: next } as TextElement;
       }
       return el;
     });
@@ -1217,45 +1359,60 @@ export default function Editor() {
           
           for (const el of pageElements) {
             if (el.type === 'text') {
-              let selectedFont = StandardFonts.Helvetica;
-              const isSerif = el.fontFamily === 'serif';
-              const isMono = el.fontFamily === 'monospace';
-              const isBoldFont = el.fontWeight === 'bold' || el.fontWeight === 'semibold' || el.fontWeight === 'medium';
-              const isItalicFont = el.fontStyle === 'italic';
+              let embeddedFont = null;
 
-              if (isMono) {
-                if (isBoldFont && isItalicFont) {
-                  selectedFont = StandardFonts.CourierBoldOblique;
-                } else if (isBoldFont) {
-                  selectedFont = StandardFonts.CourierBold;
-                } else if (isItalicFont) {
-                  selectedFont = StandardFonts.CourierOblique;
-                } else {
-                  selectedFont = StandardFonts.Courier;
-                }
-              } else if (isSerif) {
-                if (isBoldFont && isItalicFont) {
-                  selectedFont = StandardFonts.TimesRomanBoldItalic;
-                } else if (isBoldFont) {
-                  selectedFont = StandardFonts.TimesRomanBold;
-                } else if (isItalicFont) {
-                  selectedFont = StandardFonts.TimesRomanItalic;
-                } else {
-                  selectedFont = StandardFonts.TimesRoman;
-                }
-              } else {
-                if (isBoldFont && isItalicFont) {
-                  selectedFont = StandardFonts.HelveticaBoldOblique;
-                } else if (isBoldFont) {
-                  selectedFont = StandardFonts.HelveticaBold;
-                } else if (isItalicFont) {
-                  selectedFont = StandardFonts.HelveticaOblique;
-                } else {
-                  selectedFont = StandardFonts.Helvetica;
+              if (el.fontFamily && !['sans-serif', 'serif', 'monospace'].includes(el.fontFamily)) {
+                try {
+                  const fontBuffer = await fetchGoogleFontTtf(el.fontFamily);
+                  if (fontBuffer) {
+                    embeddedFont = await pdfDoc.embedFont(fontBuffer);
+                  }
+                } catch (err) {
+                  console.error('Error al incrustar Google Font:', el.fontFamily, err);
                 }
               }
 
-              const embeddedFont = await pdfDoc.embedFont(selectedFont);
+              if (!embeddedFont) {
+                let selectedFont = StandardFonts.Helvetica;
+                const isSerif = el.fontFamily === 'serif';
+                const isMono = el.fontFamily === 'monospace';
+                const isBoldFont = el.fontWeight === 'bold' || el.fontWeight === 'semibold' || el.fontWeight === 'medium';
+                const isItalicFont = el.fontStyle === 'italic';
+
+                if (isMono) {
+                  if (isBoldFont && isItalicFont) {
+                    selectedFont = StandardFonts.CourierBoldOblique;
+                  } else if (isBoldFont) {
+                    selectedFont = StandardFonts.CourierBold;
+                  } else if (isItalicFont) {
+                    selectedFont = StandardFonts.CourierOblique;
+                  } else {
+                    selectedFont = StandardFonts.Courier;
+                  }
+                } else if (isSerif) {
+                  if (isBoldFont && isItalicFont) {
+                    selectedFont = StandardFonts.TimesRomanBoldItalic;
+                  } else if (isBoldFont) {
+                    selectedFont = StandardFonts.TimesRomanBold;
+                  } else if (isItalicFont) {
+                    selectedFont = StandardFonts.TimesRomanItalic;
+                  } else {
+                    selectedFont = StandardFonts.TimesRoman;
+                  }
+                } else {
+                  if (isBoldFont && isItalicFont) {
+                    selectedFont = StandardFonts.HelveticaBoldOblique;
+                  } else if (isBoldFont) {
+                    selectedFont = StandardFonts.HelveticaBold;
+                  } else if (isItalicFont) {
+                    selectedFont = StandardFonts.HelveticaOblique;
+                  } else {
+                    selectedFont = StandardFonts.Helvetica;
+                  }
+                }
+                embeddedFont = await pdfDoc.embedFont(selectedFont);
+              }
+
               const elPdfX = el.x * width;
               const elPdfY = height - (el.y * height) - (el.fontSize * 0.95);
 
@@ -1266,6 +1423,17 @@ export default function Editor() {
                 font: embeddedFont,
                 color: hexToRgb(el.color),
               });
+
+              if (el.underline) {
+                const textWidth = embeddedFont.widthOfTextAtSize(el.text, el.fontSize);
+                const underlineY = elPdfY - (el.fontSize * 0.1);
+                page.drawLine({
+                  start: { x: elPdfX, y: underlineY },
+                  end: { x: elPdfX + textWidth, y: underlineY },
+                  thickness: Math.max(0.5, el.fontSize * 0.07),
+                  color: hexToRgb(el.color),
+                });
+              }
             } else if (el.type === 'image') {
               const base64Data = el.dataUrl.split(',')[1];
               const imageBytes = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
@@ -1598,70 +1766,143 @@ export default function Editor() {
                       className="bg-white dark:bg-slate-900 text-xs px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 w-44 outline-none text-slate-850 dark:text-slate-200 font-medium"
                     />
                     
-                    {!selectedElement.originalTextId && (
-                      <>
-                        <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
+                    <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
 
-                        <span className="text-[10px] text-slate-400 font-semibold select-none">Tamaño:</span>
-                        <select
-                          value={selectedElement.fontSize}
-                          onChange={(e) => updateSelectedFontSize(Number(e.target.value))}
-                          className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
-                        >
-                          {Array.from(new Set([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 40, 48, 56, 72, Math.round(selectedElement.fontSize)]))
-                            .sort((a, b) => a - b)
-                            .map((s) => (
-                              <option key={s} value={s}>{s}px</option>
-                            ))
-                          }
-                        </select>
+                    <span className="text-[10px] text-slate-400 font-semibold select-none">Tamaño:</span>
+                    <select
+                      value={selectedElement.fontSize}
+                      onChange={(e) => updateSelectedFontSize(Number(e.target.value))}
+                      className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
+                    >
+                      {Array.from(new Set([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 40, 48, 56, 72, Math.round(selectedElement.fontSize)]))
+                        .sort((a, b) => a - b)
+                        .map((s) => (
+                          <option key={s} value={s}>{s}px</option>
+                        ))
+                      }
+                    </select>
 
-                        <button
-                          onClick={toggleSelectedBold}
-                          className={`w-7 h-7 flex items-center justify-center rounded-lg font-bold text-xs ${
-                            selectedElement.fontWeight === 'bold'
-                              ? 'bg-emerald-500 text-white shadow-sm'
-                              : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
-                          }`}
-                          title="Negrita"
-                        >
-                          N
-                        </button>
+                    <button
+                      onClick={toggleSelectedBold}
+                      className={`w-7 h-7 flex items-center justify-center rounded-lg font-bold text-xs ${
+                        selectedElement.fontWeight === 'bold'
+                          ? 'bg-emerald-500 text-white shadow-sm'
+                          : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                      }`}
+                      title="Negrita"
+                    >
+                      N
+                    </button>
 
-                        <button
-                          onClick={toggleSelectedItalic}
-                          className={`w-7 h-7 flex items-center justify-center rounded-lg italic text-xs ${
-                            selectedElement.fontStyle === 'italic'
-                              ? 'bg-emerald-500 text-white shadow-sm'
-                              : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
-                          }`}
-                          title="Cursiva"
-                        >
-                          K
-                        </button>
+                    <button
+                      onClick={toggleSelectedItalic}
+                      className={`w-7 h-7 flex items-center justify-center rounded-lg italic text-xs ${
+                        selectedElement.fontStyle === 'italic'
+                          ? 'bg-emerald-500 text-white shadow-sm'
+                          : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                      }`}
+                      title="Cursiva"
+                    >
+                      K
+                    </button>
 
-                        <select
-                          value={selectedElement.fontFamily || 'sans-serif'}
-                          onChange={(e) => updateSelectedFontFamily(e.target.value as 'sans-serif' | 'serif' | 'monospace')}
-                          className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
-                        >
-                          <option value="sans-serif">Sans-Serif</option>
-                          <option value="serif">Serif (Times)</option>
-                          <option value="monospace">Monospace (Courier)</option>
-                        </select>
+                    <button
+                      onClick={toggleSelectedUnderline}
+                      className={`w-7 h-7 flex items-center justify-center rounded-lg underline text-xs ${
+                        selectedElement.underline
+                          ? 'bg-emerald-500 text-white shadow-sm'
+                          : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                      }`}
+                      title="Subrayado"
+                    >
+                      S
+                    </button>
 
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[10px] text-slate-400 font-semibold select-none">Color:</span>
+                    {/* Selector de Fuentes de Google con Vista Previa y Buscador */}
+                    <div className="relative" ref={fontDropdownRef}>
+                      <button
+                        onClick={() => setShowFontDropdown(!showFontDropdown)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 rounded-lg text-xs font-semibold hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shadow-sm min-w-[130px] justify-between"
+                      >
+                        <span style={{ fontFamily: selectedElement.fontFamily || 'sans-serif' }}>
+                          {selectedElement.fontFamily || 'Sans-Serif'}
+                        </span>
+                        <ChevronDown className="h-3 w-3 opacity-60" />
+                      </button>
+
+                      {showFontDropdown && (
+                        <div className="absolute left-0 mt-1.5 w-64 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl p-2 z-55 flex flex-col gap-2 max-h-80 animate-in fade-in slide-in-from-top-1 duration-150">
+                          {/* Buscador */}
                           <input
-                            type="color"
-                            value={selectedElement.color}
-                            onChange={(e) => updateSelectedColor(e.target.value)}
-                            className="w-7 h-7 p-0.5 rounded-lg cursor-pointer border border-slate-250 dark:border-slate-800 bg-white dark:bg-slate-900"
-                            title="Color del texto"
+                            type="text"
+                            placeholder="Buscar fuente..."
+                            value={fontSearch}
+                            onChange={(e) => setFontSearch(e.target.value)}
+                            className="w-full px-2.5 py-1.5 bg-slate-50 dark:bg-slate-950 text-xs rounded-lg border border-slate-200 dark:border-slate-850 outline-none text-slate-800 dark:text-slate-250 placeholder-slate-400 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                            onClick={(e) => e.stopPropagation()}
                           />
+
+                          {/* Lista de Fuentes */}
+                          <div className="flex-1 overflow-y-auto flex flex-col gap-0.5 pr-1 max-h-56">
+                            {/* Fuentes Estándar */}
+                            <div className="text-[10px] text-slate-400 font-bold px-2 py-1 select-none">
+                              Fuentes Estándar
+                            </div>
+                            {['sans-serif', 'serif', 'monospace'].map((f) => {
+                              const label = f === 'sans-serif' ? 'Sans-Serif' : f === 'serif' ? 'Serif' : 'Monospace';
+                              if (fontSearch && !label.toLowerCase().includes(fontSearch.toLowerCase())) return null;
+                              return (
+                                <button
+                                  key={f}
+                                  onClick={() => {
+                                    updateSelectedFontFamily(f);
+                                    setShowFontDropdown(false);
+                                  }}
+                                  className={`w-full text-left px-2.5 py-1.5 text-xs rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors font-medium ${
+                                    selectedElement.fontFamily === f ? 'text-emerald-500 bg-emerald-500/5 dark:bg-emerald-500/10' : 'text-slate-700 dark:text-slate-200'
+                                  }`}
+                                  style={{ fontFamily: f === 'serif' ? 'Georgia, serif' : f === 'monospace' ? 'Courier, monospace' : 'Helvetica, sans-serif' }}
+                                >
+                                  {label}
+                                </button>
+                              );
+                            })}
+
+                            {/* Google Fonts */}
+                            <div className="text-[10px] text-slate-400 font-bold px-2 py-1 select-none border-t border-slate-100 dark:border-slate-850 mt-1">
+                              Google Fonts
+                            </div>
+                            {GOOGLE_FONTS.filter(f => f.name.toLowerCase().includes(fontSearch.toLowerCase())).map((f) => (
+                              <button
+                                key={f.name}
+                                onClick={() => {
+                                  updateSelectedFontFamily(f.name);
+                                  setShowFontDropdown(false);
+                                }}
+                                className={`w-full text-left px-2.5 py-1.5 text-xs rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors ${
+                                  selectedElement.fontFamily === f.name ? 'text-emerald-500 font-bold bg-emerald-500/5 dark:bg-emerald-500/10' : 'text-slate-700 dark:text-slate-200'
+                                }`}
+                                style={{ fontFamily: f.name }}
+                                title={`${f.name} (${f.category})`}
+                              >
+                                {f.name}
+                              </button>
+                            ))}
+                          </div>
                         </div>
-                      </>
-                    )}
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-slate-400 font-semibold select-none">Color:</span>
+                      <input
+                        type="color"
+                        value={selectedElement.color}
+                        onChange={(e) => updateSelectedColor(e.target.value)}
+                        className="w-7 h-7 p-0.5 rounded-lg cursor-pointer border border-slate-250 dark:border-slate-800 bg-white dark:bg-slate-900"
+                        title="Color del texto"
+                      />
+                    </div>
 
                     <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
 
@@ -2007,9 +2248,10 @@ export default function Editor() {
                                     top: `${el.y * 100}%`,
                                     fontSize: `${el.fontSize * (zoom / 2)}px`,
                                     color: el.color,
-                                    fontFamily: el.pdfFontName || (el.fontFamily === 'serif' ? 'Georgia, "Times New Roman", serif' : el.fontFamily === 'monospace' ? 'Courier, "Courier New", monospace' : 'Helvetica, Arial, sans-serif'),
+                                    fontFamily: getCssFontFamily(el),
                                     fontWeight: mapFontWeightToCss(el.fontWeight),
                                     fontStyle: el.fontStyle || 'normal',
+                                    textDecoration: el.underline ? 'underline' : 'none',
                                     width: `${Math.max(120, tempText.length * el.fontSize * (zoom / 2) * 0.56 + 10)}px`,
                                     willChange: 'left, top',
                                     lineHeight: '1.1',
@@ -2033,63 +2275,138 @@ export default function Editor() {
                                   onPointerUp={(e) => e.stopPropagation()}
                                 >
                                   {/* Formato y Color */}
-                                  {!el.originalTextId && (
-                                    <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 dark:border-slate-800 pb-2">
-                                      <select
-                                        value={el.fontSize}
-                                        onChange={(e) => updateSelectedFontSize(Number(e.target.value))}
-                                        className="bg-slate-50 dark:bg-slate-950 text-xs px-2 py-1 rounded border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
-                                      >
-                                        {Array.from(new Set([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 40, 48, 56, 72, Math.round(el.fontSize)]))
-                                          .sort((a, b) => a - b)
-                                          .map((s) => (
-                                            <option key={s} value={s}>{s}px</option>
-                                          ))
-                                        }
-                                      </select>
+                                  <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 dark:border-slate-800 pb-2">
+                                     <select
+                                       value={el.fontSize}
+                                       onChange={(e) => updateSelectedFontSize(Number(e.target.value))}
+                                       className="bg-slate-50 dark:bg-slate-950 text-xs px-2 py-1 rounded border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
+                                     >
+                                       {Array.from(new Set([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 40, 48, 56, 72, Math.round(el.fontSize)]))
+                                         .sort((a, b) => a - b)
+                                         .map((s) => (
+                                           <option key={s} value={s}>{s}px</option>
+                                         ))
+                                       }
+                                     </select>
 
-                                      <button
-                                        onClick={toggleSelectedBold}
-                                        className={`w-7 h-7 flex items-center justify-center rounded font-bold text-xs ${
-                                          el.fontWeight === 'bold'
-                                            ? 'bg-emerald-500 text-white shadow-sm'
-                                            : 'bg-slate-100 dark:bg-slate-950 text-slate-800 dark:text-slate-200'
-                                        }`}
-                                      >
-                                        N
-                                      </button>
+                                     <button
+                                       onClick={toggleSelectedBold}
+                                       className={`w-7 h-7 flex items-center justify-center rounded font-bold text-xs ${
+                                         el.fontWeight === 'bold'
+                                           ? 'bg-emerald-500 text-white shadow-sm'
+                                           : 'bg-slate-100 dark:bg-slate-950 text-slate-800 dark:text-slate-200'
+                                       }`}
+                                     >
+                                       N
+                                     </button>
 
-                                      <button
-                                        onClick={toggleSelectedItalic}
-                                        className={`w-7 h-7 flex items-center justify-center rounded italic text-xs ${
-                                          el.fontStyle === 'italic'
-                                            ? 'bg-emerald-500 text-white shadow-sm'
-                                            : 'bg-slate-100 dark:bg-slate-950 text-slate-800 dark:text-slate-200'
-                                        }`}
-                                      >
-                                        K
-                                      </button>
+                                     <button
+                                       onClick={toggleSelectedItalic}
+                                       className={`w-7 h-7 flex items-center justify-center rounded italic text-xs ${
+                                         el.fontStyle === 'italic'
+                                           ? 'bg-emerald-500 text-white shadow-sm'
+                                           : 'bg-slate-100 dark:bg-slate-950 text-slate-800 dark:text-slate-200'
+                                       }`}
+                                     >
+                                       K
+                                     </button>
 
-                                      <select
-                                        value={el.fontFamily || 'sans-serif'}
-                                        onChange={(e) => updateSelectedFontFamily(e.target.value as 'sans-serif' | 'serif' | 'monospace')}
-                                        className="bg-slate-50 dark:bg-slate-955 text-xs px-2 py-1 rounded border border-slate-200 dark:border-slate-800 outline-none text-slate-855 dark:text-slate-200"
-                                      >
-                                        <option value="sans-serif">Sans-Serif</option>
-                                        <option value="serif">Serif (Times)</option>
-                                        <option value="monospace">Monospace (Courier)</option>
-                                      </select>
+                                     <button
+                                       onClick={toggleSelectedUnderline}
+                                       className={`w-7 h-7 flex items-center justify-center rounded underline text-xs font-semibold ${
+                                         el.underline
+                                           ? 'bg-emerald-500 text-white shadow-sm'
+                                           : 'bg-slate-100 dark:bg-slate-955 text-slate-800 dark:text-slate-200'
+                                       }`}
+                                       title="Subrayado"
+                                     >
+                                       S
+                                     </button>
 
-                                      {/* Selector de Color directo en el popup */}
-                                      <input
-                                        type="color"
-                                        value={el.color}
-                                        onChange={(e) => updateSelectedColor(e.target.value)}
-                                        className="w-7 h-7 p-0.5 rounded cursor-pointer border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950"
-                                        title="Cambiar color del texto"
-                                      />
-                                    </div>
-                                  )}
+                                     {/* Selector de Fuentes de Google con Vista Previa y Buscador */}
+                                     <div className="relative" ref={inlineFontDropdownRef}>
+                                       <button
+                                         onClick={() => setShowInlineFontDropdown(!showInlineFontDropdown)}
+                                         className="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 rounded-lg text-xs font-semibold hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shadow-sm min-w-[130px] justify-between"
+                                       >
+                                         <span style={{ fontFamily: el.fontFamily || 'sans-serif' }}>
+                                           {el.fontFamily || 'Sans-Serif'}
+                                         </span>
+                                         <ChevronDown className="h-3 w-3 opacity-60" />
+                                       </button>
+
+                                       {showInlineFontDropdown && (
+                                         <div className="absolute left-0 mt-1.5 w-64 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl p-2 z-55 flex flex-col gap-2 max-h-80 animate-in fade-in slide-in-from-top-1 duration-150">
+                                           {/* Buscador */}
+                                           <input
+                                             type="text"
+                                             placeholder="Buscar fuente..."
+                                             value={inlineFontSearch}
+                                             onChange={(e) => setInlineFontSearch(e.target.value)}
+                                             className="w-full px-2.5 py-1.5 bg-slate-50 dark:bg-slate-955 text-xs rounded-lg border border-slate-200 dark:border-slate-850 outline-none text-slate-800 dark:text-slate-250 placeholder-slate-400 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                                             onClick={(e) => e.stopPropagation()}
+                                           />
+
+                                           {/* Lista de Fuentes */}
+                                           <div className="flex-1 overflow-y-auto flex flex-col gap-0.5 pr-1 max-h-56">
+                                             {/* Fuentes Estándar */}
+                                             <div className="text-[10px] text-slate-400 font-bold px-2 py-1 select-none">
+                                               Fuentes Estándar
+                                             </div>
+                                             {['sans-serif', 'serif', 'monospace'].map((f) => {
+                                               const label = f === 'sans-serif' ? 'Sans-Serif' : f === 'serif' ? 'Serif' : 'Monospace';
+                                               if (inlineFontSearch && !label.toLowerCase().includes(inlineFontSearch.toLowerCase())) return null;
+                                               return (
+                                                 <button
+                                                   key={f}
+                                                   onClick={() => {
+                                                     updateSelectedFontFamily(f);
+                                                     setShowInlineFontDropdown(false);
+                                                   }}
+                                                   className={`w-full text-left px-2.5 py-1.5 text-xs rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors font-medium ${
+                                                     el.fontFamily === f ? 'text-emerald-500 bg-emerald-500/5 dark:bg-emerald-500/10' : 'text-slate-700 dark:text-slate-200'
+                                                   }`}
+                                                   style={{ fontFamily: f === 'serif' ? 'Georgia, serif' : f === 'monospace' ? 'Courier, monospace' : 'Helvetica, sans-serif' }}
+                                                 >
+                                                   {label}
+                                                 </button>
+                                               );
+                                             })}
+
+                                             {/* Google Fonts */}
+                                             <div className="text-[10px] text-slate-400 font-bold px-2 py-1 select-none border-t border-slate-100 dark:border-slate-855 mt-1">
+                                               Google Fonts
+                                             </div>
+                                             {GOOGLE_FONTS.filter(f => f.name.toLowerCase().includes(inlineFontSearch.toLowerCase())).map((f) => (
+                                               <button
+                                                 key={f.name}
+                                                 onClick={() => {
+                                                   updateSelectedFontFamily(f.name);
+                                                   setShowInlineFontDropdown(false);
+                                                 }}
+                                                 className={`w-full text-left px-2.5 py-1.5 text-xs rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors ${
+                                                   el.fontFamily === f.name ? 'text-emerald-500 font-bold bg-emerald-500/5 dark:bg-emerald-500/10' : 'text-slate-700 dark:text-slate-200'
+                                                 }`}
+                                                 style={{ fontFamily: f.name }}
+                                                 title={`${f.name} (${f.category})`}
+                                               >
+                                                 {f.name}
+                                               </button>
+                                             ))}
+                                           </div>
+                                         </div>
+                                       )}
+                                     </div>
+
+                                     {/* Selector de Color directo en el popup */}
+                                     <input
+                                       type="color"
+                                       value={el.color}
+                                       onChange={(e) => updateSelectedColor(e.target.value)}
+                                       className="w-7 h-7 p-0.5 rounded cursor-pointer border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950"
+                                       title="Cambiar color del texto"
+                                     />
+                                   </div>
 
                                   {/* Acciones */}
                                   <div className="flex justify-between items-center text-xs">
@@ -2139,9 +2456,10 @@ export default function Editor() {
                                 top: `${el.y * 100}%`,
                                 fontSize: `${el.fontSize * (zoom / 2)}px`,
                                 color: el.color,
-                                fontFamily: el.pdfFontName || (el.fontFamily === 'serif' ? 'Georgia, "Times New Roman", serif' : el.fontFamily === 'monospace' ? 'Courier, "Courier New", monospace' : 'Helvetica, Arial, sans-serif'),
+                                fontFamily: getCssFontFamily(el),
                                 fontWeight: mapFontWeightToCss(el.fontWeight),
                                 fontStyle: el.fontStyle || 'normal',
+                                textDecoration: el.underline ? 'underline' : 'none',
                                 transform: 'translate(0, 0)',
                                 whiteSpace: 'nowrap',
                                 willChange: 'left, top',
