@@ -2258,7 +2258,7 @@ export default function Editor() {
                                     if (e.key === 'Enter') handleConfirmTextEdit(el.id);
                                     if (e.key === 'Escape') handleCancelTextEdit();
                                   }}
-                                  className="absolute pointer-events-auto rounded outline outline-2 outline-emerald-500 bg-transparent z-45 border-0 m-0 focus:outline-emerald-500 focus:ring-0"
+                                  className="absolute pointer-events-auto rounded bg-transparent z-45 border-0 m-0 focus:ring-0"
                                   style={{
                                     left: `${el.x * 100}%`,
                                     top: `${el.y * 100}%`,
@@ -2269,16 +2269,21 @@ export default function Editor() {
                                     fontStyle: el.fontStyle || 'normal',
                                     textDecoration: el.underline ? 'underline' : 'none',
                                     width: `${Math.max(120, tempText.length * el.fontSize * (zoom / 2) * 0.56 + 10)}px`,
-                                    height: `${el.fontSize * (zoom / 2) * 1.15}px`,
+                                    height: `${el.fontSize * (zoom / 2) * 1.1}px`,
                                     willChange: 'left, top',
                                     lineHeight: '1.1',
                                     padding: '0px',
                                     margin: '0px',
-                                    outlineOffset: '3px',
                                     border: 'none',
                                     boxSizing: 'border-box',
                                     verticalAlign: 'baseline',
                                     textIndent: '0px',
+                                    backgroundColor: 'transparent',
+                                    appearance: 'none',
+                                    WebkitAppearance: 'none',
+                                    MozAppearance: 'none',
+                                    outline: 'none',
+                                    boxShadow: '0 0 0 2px #10b981',
                                   }}
                                 />
 
@@ -2481,7 +2486,7 @@ export default function Editor() {
                                 fontWeight: mapFontWeightToCss(el.fontWeight),
                                 fontStyle: el.fontStyle || 'normal',
                                 textDecoration: el.underline ? 'underline' : 'none',
-                                height: `${el.fontSize * (zoom / 2) * 1.15}px`,
+                                height: `${el.fontSize * (zoom / 2) * 1.1}px`,
                                 transform: 'translate(0, 0)',
                                 whiteSpace: 'nowrap',
                                 willChange: 'left, top',
