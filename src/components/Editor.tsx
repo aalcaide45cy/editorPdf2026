@@ -192,7 +192,48 @@ const detectTextAndBgColor = (
     const ctx = canvas.getContext('2d');
     if (!ctx) return { textColor: '#000000', bgColor: '#ffffff' };
 
-    // Convertir de coordenadas relativas a píxeles físicos del lienzo
+    // 1. Muestrear las esquinas de todo el lienzo (canvas) para determinar el color de fondo de la página
+    const samplePageCorner = (cx: number, cy: number) => {
+      try {
+        const pix = ctx.getImageData(cx, cy, 1, 1).data;
+        const r = pix[0];
+        const g = pix[1];
+        const b = pix[2];
+        const a = pix[3];
+        const alpha = a / 255;
+        return [
+          Math.round(r * alpha + 255 * (1 - alpha)),
+          Math.round(g * alpha + 255 * (1 - alpha)),
+          Math.round(b * alpha + 255 * (1 - alpha))
+        ];
+      } catch (e) {
+        return [255, 255, 255];
+      }
+    };
+
+    const w = canvas.width;
+    const h = canvas.height;
+    const corners = [
+      samplePageCorner(Math.min(5, w - 1), Math.min(5, h - 1)),
+      samplePageCorner(Math.max(0, w - 6), Math.min(5, h - 1)),
+      samplePageCorner(Math.min(5, w - 1), Math.max(0, h - 6)),
+      samplePageCorner(Math.max(0, w - 6), Math.max(0, h - 6))
+    ];
+
+    let bgRSum = 0, bgGSum = 0, bgBSum = 0;
+    for (const [r, g, b] of corners) {
+      bgRSum += r;
+      bgGSum += g;
+      bgBSum += b;
+    }
+    const bgR = Math.round(bgRSum / 4);
+    const bgG = Math.round(bgGSum / 4);
+    const bgB = Math.round(bgBSum / 4);
+
+    const toHex = (c: number) => c.toString(16).padStart(2, '0');
+    const bgColor = `#${toHex(bgR)}${toHex(bgG)}${toHex(bgB)}`;
+
+    // 2. Convertir de coordenadas relativas a píxeles físicos del lienzo para leer el recuadro del texto
     let pxX = Math.round(x * canvas.width);
     let pxY = Math.round(y * canvas.height);
     let pxW = Math.round(width * canvas.width);
@@ -207,7 +248,7 @@ const detectTextAndBgColor = (
     const imgData = ctx.getImageData(pxX, pxY, pxW, pxH);
     const data = imgData.data;
 
-    // Helper para mezclar un píxel sobre fondo blanco (comportamiento por defecto del PDF)
+    // Helper para mezclar un píxel de la caja del texto sobre fondo blanco
     const getPixelColor = (idx: number) => {
       const r = data[idx];
       const g = data[idx + 1];
@@ -220,28 +261,6 @@ const detectTextAndBgColor = (
         Math.round(b * alpha + 255 * (1 - alpha))
       ];
     };
-
-    // Muestrear las esquinas para determinar el color de fondo aproximado
-    const cornerIndices = [
-      0, // superior izquierda
-      Math.min(data.length - 4, (pxW - 1) * 4), // superior derecha
-      Math.min(data.length - 4, (pxH - 1) * pxW * 4), // inferior izquierda
-      data.length - 4 // inferior derecha
-    ];
-
-    let bgRSum = 0, bgGSum = 0, bgBSum = 0;
-    for (const idx of cornerIndices) {
-      const [r, g, b] = getPixelColor(idx);
-      bgRSum += r;
-      bgGSum += g;
-      bgBSum += b;
-    }
-    const bgR = Math.round(bgRSum / 4);
-    const bgG = Math.round(bgGSum / 4);
-    const bgB = Math.round(bgBSum / 4);
-
-    const toHex = (c: number) => c.toString(16).padStart(2, '0');
-    const bgColor = `#${toHex(bgR)}${toHex(bgG)}${toHex(bgB)}`;
 
     // Buscar píxeles que difieran del fondo para obtener el color de letra
     let rSum = 0, gSum = 0, bSum = 0, count = 0;
