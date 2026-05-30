@@ -42,6 +42,7 @@ interface TextElement {
   fontStyle?: 'italic' | 'normal';
   fontFamily?: 'sans-serif' | 'serif' | 'monospace';
   originalTextId?: string;
+  pdfFontName?: string;
 }
 
 interface ImageElement {
@@ -81,6 +82,7 @@ interface OriginalTextItem {
   fontWeight: 'bold' | 'normal' | 'medium' | 'semibold' | 'light';
   fontStyle: 'italic' | 'normal';
   fontFamily: 'sans-serif' | 'serif' | 'monospace';
+  pdfFontName?: string;
 }
 
 // Analizar colores de texto y fondo leyendo píxeles del canvas con límites de seguridad estrictos
@@ -410,6 +412,7 @@ export default function Editor() {
               fontWeight,
               fontStyle: isItalic ? 'italic' : 'normal',
               fontFamily,
+              pdfFontName: fontStyleObj ? fontStyleObj.fontFamily : item.fontName,
             };
           });
         
@@ -818,6 +821,7 @@ export default function Editor() {
       fontStyle: item.fontStyle,
       fontFamily: item.fontFamily,
       originalTextId: item.id,
+      pdfFontName: item.pdfFontName,
     };
 
     const pageElements = elements[currentPage] || [];
@@ -2003,7 +2007,7 @@ export default function Editor() {
                                     top: `${el.y * 100}%`,
                                     fontSize: `${el.fontSize * (zoom / 2)}px`,
                                     color: el.color,
-                                    fontFamily: el.fontFamily === 'serif' ? 'Georgia, "Times New Roman", serif' : el.fontFamily === 'monospace' ? 'Courier, "Courier New", monospace' : 'Helvetica, Arial, sans-serif',
+                                    fontFamily: el.pdfFontName || (el.fontFamily === 'serif' ? 'Georgia, "Times New Roman", serif' : el.fontFamily === 'monospace' ? 'Courier, "Courier New", monospace' : 'Helvetica, Arial, sans-serif'),
                                     fontWeight: mapFontWeightToCss(el.fontWeight),
                                     fontStyle: el.fontStyle || 'normal',
                                     width: `${Math.max(120, tempText.length * el.fontSize * (zoom / 2) * 0.56 + 10)}px`,
@@ -2135,7 +2139,7 @@ export default function Editor() {
                                 top: `${el.y * 100}%`,
                                 fontSize: `${el.fontSize * (zoom / 2)}px`,
                                 color: el.color,
-                                fontFamily: el.fontFamily === 'serif' ? 'Georgia, "Times New Roman", serif' : el.fontFamily === 'monospace' ? 'Courier, "Courier New", monospace' : 'Helvetica, Arial, sans-serif',
+                                fontFamily: el.pdfFontName || (el.fontFamily === 'serif' ? 'Georgia, "Times New Roman", serif' : el.fontFamily === 'monospace' ? 'Courier, "Courier New", monospace' : 'Helvetica, Arial, sans-serif'),
                                 fontWeight: mapFontWeightToCss(el.fontWeight),
                                 fontStyle: el.fontStyle || 'normal',
                                 transform: 'translate(0, 0)',
