@@ -536,7 +536,11 @@ export default function Editor() {
               fontWeight,
               fontStyle: isItalic ? 'italic' : 'normal',
               fontFamily,
-              pdfFontName: cleanFontSubsetPrefix(fontStyleObj ? fontStyleObj.fontFamily : item.fontName),
+              pdfFontName: cleanFontSubsetPrefix(
+                fontStyleObj && fontStyleObj.fontFamily && !['sans-serif', 'serif', 'monospace'].includes(fontStyleObj.fontFamily)
+                  ? fontStyleObj.fontFamily
+                  : item.fontName
+              ),
             };
           });
         
