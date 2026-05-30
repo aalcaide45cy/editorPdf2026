@@ -1248,7 +1248,8 @@ export default function Editor() {
     const updated = pageElements.map((el) => {
       if (el.id === selectedElementId && el.type === 'text') {
         const next = el.fontWeight === 'bold' ? 'normal' : 'bold';
-        return { ...el, fontWeight: next } as TextElement;
+        const { pdfFontName, ...rest } = el;
+        return { ...rest, fontWeight: next } as TextElement;
       }
       return el;
     });
@@ -1260,7 +1261,8 @@ export default function Editor() {
     const updated = pageElements.map((el) => {
       if (el.id === selectedElementId && el.type === 'text') {
         const next = el.fontStyle === 'italic' ? 'normal' : 'italic';
-        return { ...el, fontStyle: next } as TextElement;
+        const { pdfFontName, ...rest } = el;
+        return { ...rest, fontStyle: next } as TextElement;
       }
       return el;
     });
@@ -2265,8 +2267,8 @@ export default function Editor() {
                                     fontSize: `${el.fontSize * (zoom / 2)}px`,
                                     color: el.color,
                                     fontFamily: getCssFontFamily(el),
-                                    fontWeight: mapFontWeightToCss(el.fontWeight),
-                                    fontStyle: el.fontStyle || 'normal',
+                                    fontWeight: el.pdfFontName ? 'normal' : mapFontWeightToCss(el.fontWeight),
+                                    fontStyle: el.pdfFontName ? 'normal' : (el.fontStyle || 'normal'),
                                     textDecoration: el.underline ? 'underline' : 'none',
                                     width: `${Math.max(120, tempText.length * el.fontSize * (zoom / 2) * 0.56 + 10)}px`,
                                     height: `${el.fontSize * (zoom / 2) * 1.1}px`,
@@ -2483,8 +2485,8 @@ export default function Editor() {
                                 fontSize: `${el.fontSize * (zoom / 2)}px`,
                                 color: el.color,
                                 fontFamily: getCssFontFamily(el),
-                                fontWeight: mapFontWeightToCss(el.fontWeight),
-                                fontStyle: el.fontStyle || 'normal',
+                                fontWeight: el.pdfFontName ? 'normal' : mapFontWeightToCss(el.fontWeight),
+                                fontStyle: el.pdfFontName ? 'normal' : (el.fontStyle || 'normal'),
                                 textDecoration: el.underline ? 'underline' : 'none',
                                 height: `${el.fontSize * (zoom / 2) * 1.1}px`,
                                 transform: 'translate(0, 0)',
@@ -2542,16 +2544,20 @@ export default function Editor() {
                             </div>
                           );
                         } else if (el.type === 'shape') {
+                          const isWhiteout = el.id.startsWith('whiteout-orig-');
                           return (
                             <div
                               key={el.id}
-                              onPointerDown={(e) => handleElementPointerDown(e, el)}
+                              onPointerDown={(e) => {
+                                if (isWhiteout) return;
+                                handleElementPointerDown(e, el);
+                              }}
                               onPointerUp={(e) => e.stopPropagation()}
                               onClick={(e) => e.stopPropagation()}
-                              className={`absolute cursor-move pointer-events-auto transition-[outline] ${
-                                isSel 
+                              className={`absolute ${isWhiteout ? 'pointer-events-none z-10' : 'cursor-move pointer-events-auto transition-[outline]'} ${
+                                !isWhiteout && isSel 
                                   ? 'outline outline-2 outline-emerald-500 shadow-md z-30' 
-                                  : 'hover:outline hover:outline-1 hover:outline-slate-400'
+                                  : isWhiteout ? '' : 'hover:outline hover:outline-1 hover:outline-slate-400'
                               }`}
                               style={{
                                 left: `${el.x * 100}%`,
@@ -2559,14 +2565,14 @@ export default function Editor() {
                                 width: `${el.width * 100}%`,
                                 height: `${el.height * 100}%`,
                                 backgroundColor: el.color,
-                                border: el.borderWidth > 0 ? `${el.borderWidth / 2}px solid ${el.borderColor}` : 'none',
+                                border: !isWhiteout && el.borderWidth > 0 ? `${el.borderWidth / 2}px solid ${el.borderColor}` : 'none',
                                 borderRadius: el.shapeType === 'circle' ? '50%' : '0px',
                                 opacity: el.opacity,
                                 willChange: 'left, top, width, height',
-                                touchAction: 'none',
+                                touchAction: isWhiteout ? 'none' : 'none',
                               }}
                             >
-                              {isSel && (
+                              {isSel && !isWhiteout && (
                                 <div
                                   onPointerDown={(e) => startResize(e, el)}
                                   className="absolute bottom-[-5px] right-[-5px] w-3.5 h-3.5 bg-emerald-500 border border-white dark:border-slate-900 rounded-full cursor-se-resize z-25 pointer-events-auto shadow-sm"
