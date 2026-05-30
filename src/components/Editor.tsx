@@ -19,7 +19,8 @@ import {
   Circle,
   Edit3,
   Undo,
-  Redo
+  Redo,
+  ChevronDown
 } from 'lucide-react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { PDFDocument, rgb, degrees, StandardFonts } from 'pdf-lib';
@@ -37,9 +38,9 @@ interface TextElement {
   y: number;
   fontSize: number;
   color: string;
-  fontWeight?: 'bold' | 'normal';
+  fontWeight?: 'bold' | 'normal' | 'medium' | 'semibold' | 'light';
   fontStyle?: 'italic' | 'normal';
-  fontFamily?: 'sans-serif' | 'serif';
+  fontFamily?: 'sans-serif' | 'serif' | 'monospace';
   originalTextId?: string;
 }
 
@@ -77,9 +78,9 @@ interface OriginalTextItem {
   width: number;
   height: number;
   fontSize: number;
-  fontWeight: 'bold' | 'normal';
+  fontWeight: 'bold' | 'normal' | 'medium' | 'semibold' | 'light';
   fontStyle: 'italic' | 'normal';
-  fontFamily: 'sans-serif' | 'serif';
+  fontFamily: 'sans-serif' | 'serif' | 'monospace';
 }
 
 // Analizar colores de texto y fondo leyendo píxeles del canvas con límites de seguridad estrictos
@@ -161,6 +162,15 @@ const detectTextAndBgColor = (
   }
 };
 
+const mapFontWeightToCss = (weight?: string) => {
+  if (!weight) return 'normal';
+  if (weight === 'bold') return 'bold';
+  if (weight === 'semibold') return 'bold';
+  if (weight === 'medium') return 'bold';
+  if (weight === 'light') return '300';
+  return 'normal';
+};
+
 export default function Editor() {
   // Document states
   const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -214,6 +224,8 @@ export default function Editor() {
 
   // Interactive tools states
   const [showSignaturePad, setShowSignaturePad] = useState(false);
+  const [showShapesDropdown, setShowShapesDropdown] = useState(false);
+  const shapesDropdownRef = useRef<HTMLDivElement>(null);
   
   // Drag & Resize references for HIGH PERFORMANCE (Zero Lag)
   const isDraggingRef = useRef(false);
@@ -290,6 +302,17 @@ export default function Editor() {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [pdfFile]);
 
+  // Cerrar el desplegable de formas al hacer clic fuera
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (shapesDropdownRef.current && !shapesDropdownRef.current.contains(e.target as Node)) {
+        setShowShapesDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   // Renderizar la página actual cuando cambia el PDF, la página actual o el zoom
   useEffect(() => {
     if (!pdfDocProxy) return;
@@ -336,18 +359,31 @@ export default function Editor() {
             const fontStyleObj = textContent.styles[item.fontName];
             const fontName = ((fontStyleObj ? fontStyleObj.fontFamily : '') || item.fontName || '').toLowerCase();
             
-            const isBold = fontName.includes('bold') || 
-                           fontName.includes('black') || 
-                           fontName.includes('heavy') || 
-                           fontName.includes('w700') || 
-                           fontName.includes('w850') || 
-                           fontName.includes('w800') || 
-                           fontName.includes('w900') || 
-                           fontName.includes('w600') || 
-                           fontName.includes('semibold') ||
-                           fontName.includes('-bd') ||
-                           fontName.endsWith('bd') ||
-                           fontName.includes('demi');
+            let fontWeight: 'bold' | 'normal' | 'medium' | 'semibold' | 'light' = 'normal';
+            if (fontName.includes('black') || fontName.includes('heavy') || fontName.includes('w900')) {
+              fontWeight = 'bold';
+            } else if (
+              fontName.includes('bold') || 
+              fontName.includes('w700') || 
+              fontName.includes('w800') || 
+              fontName.includes('w850') || 
+              fontName.includes('-bd') || 
+              fontName.endsWith('bd') ||
+              fontName.includes('-bold') ||
+              fontName.includes('_bold') ||
+              fontName.includes('.bold') ||
+              fontName.includes('boldmt') ||
+              fontName.endsWith('-b') ||
+              fontName.endsWith('_b')
+            ) {
+              fontWeight = 'bold';
+            } else if (fontName.includes('semibold') || fontName.includes('w600') || fontName.includes('demi') || fontName.includes('semi-bold') || fontName.includes('semi')) {
+              fontWeight = 'semibold';
+            } else if (fontName.includes('medium') || fontName.includes('w500') || fontName.includes('med')) {
+              fontWeight = 'medium';
+            } else if (fontName.includes('light') || fontName.includes('w300') || fontName.includes('lt')) {
+              fontWeight = 'light';
+            }
 
             const isItalic = fontName.includes('italic') || 
                              fontName.includes('oblique') || 
@@ -356,9 +392,13 @@ export default function Editor() {
                              fontName.endsWith('it') ||
                              fontName.includes('slant');
             
-            // CORRECCIÓN: "sans-serif".includes("serif") es true, debemos descartarlo usando !includes('sans')
+            const isMonospace = fontName.includes('mono') || fontName.includes('courier') || fontName.includes('consolas') || fontName.includes('code');
             const isSerif = (fontName.includes('serif') && !fontName.includes('sans')) || fontName.includes('times') || fontName.includes('roman') || fontName.includes('georgia') || fontName.includes('cambria') || fontName.includes('garamond');
             
+            let fontFamily: 'sans-serif' | 'serif' | 'monospace' = 'sans-serif';
+            if (isMonospace) fontFamily = 'monospace';
+            else if (isSerif) fontFamily = 'serif';
+
             return {
               id: `orig-${currentPage}-${idx}`,
               text: item.str,
@@ -367,9 +407,9 @@ export default function Editor() {
               width: itemWidth / viewport.width,
               height: itemHeight / viewport.height,
               fontSize: fontSize,
-              fontWeight: isBold ? 'bold' : 'normal',
+              fontWeight,
               fontStyle: isItalic ? 'italic' : 'normal',
-              fontFamily: isSerif ? 'serif' : 'sans-serif',
+              fontFamily,
             };
           });
         
@@ -429,6 +469,8 @@ export default function Editor() {
       const pageWidth = viewport.width;
 
       const wrapperWidth = canvasWrapperRef.current.clientWidth;
+      if (wrapperWidth < 50) return; // Evitar calcular zoom erróneo cuando el contenedor está colapsado
+
       const targetWidth = Math.max(200, wrapperWidth - 48);
 
       let calculatedZoom = (targetWidth * 2) / pageWidth;
@@ -441,22 +483,23 @@ export default function Editor() {
     }
   };
 
-  // Adjust zoom to fit width when PDF is loaded, page changes, or rotations change
+  // Ajustar el zoom automático del PDF usando un ResizeObserver para reaccionar al tamaño del contenedor de forma fluida
   useEffect(() => {
-    if (!pdfDocProxy) return;
-    adjustZoomToFitWidth(pdfDocProxy);
-  }, [pdfDocProxy, currentPage, rotations[currentPage]]);
+    if (!pdfDocProxy || !canvasWrapperRef.current) return;
 
-  // Listen to window resize to dynamically update zoom
-  useEffect(() => {
-    if (!pdfDocProxy) return;
-    
-    const handleResize = () => {
-      adjustZoomToFitWidth(pdfDocProxy);
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const width = entry.contentRect.width;
+        if (width > 50) {
+          adjustZoomToFitWidth(pdfDocProxy);
+        }
+      }
+    });
+
+    resizeObserver.observe(canvasWrapperRef.current);
+    return () => {
+      resizeObserver.disconnect();
     };
-
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
   }, [pdfDocProxy, currentPage, rotations[currentPage]]);
 
   // Cargar PDF en memoria
@@ -1075,7 +1118,7 @@ export default function Editor() {
     pushToHistory({ ...elements, [currentPage]: updated });
   };
 
-  const updateSelectedFontFamily = (family: 'sans-serif' | 'serif') => {
+  const updateSelectedFontFamily = (family: 'sans-serif' | 'serif' | 'monospace') => {
     const pageElements = elements[currentPage] || [];
     const updated = pageElements.map((el) => {
       if (el.id === selectedElementId && el.type === 'text') {
@@ -1172,23 +1215,36 @@ export default function Editor() {
             if (el.type === 'text') {
               let selectedFont = StandardFonts.Helvetica;
               const isSerif = el.fontFamily === 'serif';
-              
-              if (isSerif) {
-                if (el.fontWeight === 'bold' && el.fontStyle === 'italic') {
+              const isMono = el.fontFamily === 'monospace';
+              const isBoldFont = el.fontWeight === 'bold' || el.fontWeight === 'semibold' || el.fontWeight === 'medium';
+              const isItalicFont = el.fontStyle === 'italic';
+
+              if (isMono) {
+                if (isBoldFont && isItalicFont) {
+                  selectedFont = StandardFonts.CourierBoldOblique;
+                } else if (isBoldFont) {
+                  selectedFont = StandardFonts.CourierBold;
+                } else if (isItalicFont) {
+                  selectedFont = StandardFonts.CourierOblique;
+                } else {
+                  selectedFont = StandardFonts.Courier;
+                }
+              } else if (isSerif) {
+                if (isBoldFont && isItalicFont) {
                   selectedFont = StandardFonts.TimesRomanBoldItalic;
-                } else if (el.fontWeight === 'bold') {
+                } else if (isBoldFont) {
                   selectedFont = StandardFonts.TimesRomanBold;
-                } else if (el.fontStyle === 'italic') {
+                } else if (isItalicFont) {
                   selectedFont = StandardFonts.TimesRomanItalic;
                 } else {
                   selectedFont = StandardFonts.TimesRoman;
                 }
               } else {
-                if (el.fontWeight === 'bold' && el.fontStyle === 'italic') {
+                if (isBoldFont && isItalicFont) {
                   selectedFont = StandardFonts.HelveticaBoldOblique;
-                } else if (el.fontWeight === 'bold') {
+                } else if (isBoldFont) {
                   selectedFont = StandardFonts.HelveticaBold;
-                } else if (el.fontStyle === 'italic') {
+                } else if (isItalicFont) {
                   selectedFont = StandardFonts.HelveticaOblique;
                 } else {
                   selectedFont = StandardFonts.Helvetica;
@@ -1364,385 +1420,439 @@ export default function Editor() {
         <div className="flex flex-col gap-4">
           
           {/* BARRA DE HERRAMIENTAS */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm flex flex-wrap items-center justify-between gap-4 transition-colors">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm flex flex-col gap-4 items-stretch transition-colors">
             
-            {/* Acciones de Inserción */}
-            <div className="flex items-center gap-2">
-              <button
-                onClick={addTextElement}
-                disabled={activePageDeleted}
-                className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
-                title="Añadir Nuevo Texto"
-              >
-                <Type className="h-4 w-4" />
-                <span>Texto</span>
-              </button>
-
-              <button
-                onClick={() => addShapeElement('rect')}
-                disabled={activePageDeleted}
-                className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
-                title="Añadir Rectángulo"
-              >
-                <Square className="h-4 w-4" />
-                <span>Rectángulo</span>
-              </button>
-
-              <button
-                onClick={() => addShapeElement('circle')}
-                disabled={activePageDeleted}
-                className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
-                title="Añadir Círculo"
-              >
-                <Circle className="h-4 w-4" />
-                <span>Círculo</span>
-              </button>
-
-              <button
-                onClick={() => setShowSignaturePad(true)}
-                disabled={activePageDeleted}
-                className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
-                title="Dibujar e Insertar Firma"
-              >
-                <PenTool className="h-4 w-4" />
-                <span>Firmar</span>
-              </button>
-
-              <button
-                onClick={() => imageInputRef.current?.click()}
-                disabled={activePageDeleted}
-                className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
-                title="Subir Imagen Local"
-              >
-                <FileImage className="h-4 w-4" />
-                <span>Imagen</span>
-              </button>
-
-              <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1" />
-
-              <button
-                onClick={() => setIsEditTextMode(!isEditTextMode)}
-                disabled={activePageDeleted || originalTextItems.length === 0}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-40 ${
-                  isEditTextMode 
-                    ? 'bg-emerald-500 hover:bg-emerald-600 text-white shadow-sm' 
-                    : 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400'
-                }`}
-                title="Habilitar/Deshabilitar capa para editar el texto original del documento"
-              >
-                <Edit3 className="h-4 w-4" />
-                <span>Modificar Original</span>
-              </button>
-
-              {/* Botón Deshacer */}
-              <button
-                onClick={handleUndo}
-                disabled={history.length === 0}
-                className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-semibold transition-all disabled:opacity-40 border border-slate-200 dark:border-slate-800 shadow-sm"
-                title="Deshacer última acción"
-              >
-                <Undo className="h-4 w-4" />
-                <span>Deshacer</span>
-              </button>
-
-              {/* Botón Rehacer */}
-              <button
-                onClick={handleRedo}
-                disabled={redoHistory.length === 0}
-                className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-semibold transition-all disabled:opacity-40 border border-slate-200 dark:border-slate-800 shadow-sm"
-                title="Rehacer acción deshecha"
-              >
-                <Redo className="h-4 w-4" />
-                <span>Rehacer</span>
-              </button>
-
-              <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1" />
-
-              {/* Navegación de Páginas */}
-              <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-750">
+            {/* Fila 1: Acciones de Inserción y Navegación */}
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
-                  onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                  disabled={currentPage === 1}
-                  className="p-1 hover:bg-white dark:hover:bg-slate-700 rounded-lg text-slate-700 dark:text-slate-200 disabled:opacity-40 transition-all"
-                  title="Página Anterior"
+                  onClick={addTextElement}
+                  disabled={activePageDeleted}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
+                  title="Añadir Nuevo Texto"
                 >
-                  <ChevronLeft className="h-4 w-4" />
+                  <Type className="h-4 w-4" />
+                  <span>Texto</span>
                 </button>
-                
-                <select
-                  value={currentPage}
-                  onChange={(e) => setCurrentPage(Number(e.target.value))}
-                  className="bg-transparent text-xs font-bold text-slate-700 dark:text-slate-250 outline-none cursor-pointer px-1.5 py-0.5"
-                >
-                  {Array.from({ length: numPages }).map((_, index) => {
-                    const pageNum = index + 1;
-                    const isDel = deletedPages.has(pageNum);
-                    const rot = rotations[pageNum];
-                    let label = `Pág. ${pageNum} / ${numPages}`;
-                    if (isDel) label += ' (Eliminada)';
-                    if (rot) label += ` (${rot}°)`;
-                    return (
-                      <option key={pageNum} value={pageNum} className="dark:bg-slate-900 text-slate-900 dark:text-slate-100">
-                        {label}
-                      </option>
-                    );
-                  })}
-                </select>
+
+                {/* Desplegable de Formas */}
+                <div className="relative" ref={shapesDropdownRef}>
+                  <button
+                    onClick={() => setShowShapesDropdown(!showShapesDropdown)}
+                    disabled={activePageDeleted}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-all disabled:opacity-50 ${
+                      showShapesDropdown 
+                        ? 'bg-emerald-500 text-white shadow-sm' 
+                        : 'bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400'
+                    }`}
+                    title="Formas Básicas"
+                  >
+                    <Square className="h-4 w-4" />
+                    <span>Formas</span>
+                    <ChevronDown className="h-3 w-3 opacity-60 ml-0.5" />
+                  </button>
+
+                  {showShapesDropdown && (
+                    <div className="absolute left-0 mt-1.5 w-40 bg-white dark:bg-slate-900 border border-slate-250 dark:border-slate-800 rounded-xl shadow-xl p-1 z-55 flex flex-col gap-0.5 animate-in fade-in slide-in-from-top-1 duration-150">
+                      <button
+                        onClick={() => {
+                          addShapeElement('rect');
+                          setShowShapesDropdown(false);
+                        }}
+                        className="flex items-center gap-2 w-full px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-left transition-colors"
+                      >
+                        <Square className="h-3.5 w-3.5" />
+                        <span>Rectángulo</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          addShapeElement('circle');
+                          setShowShapesDropdown(false);
+                        }}
+                        className="flex items-center gap-2 w-full px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-850 rounded-lg text-left transition-colors"
+                      >
+                        <Circle className="h-3.5 w-3.5" />
+                        <span>Círculo</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
 
                 <button
-                  onClick={() => setCurrentPage(Math.min(numPages, currentPage + 1))}
-                  disabled={currentPage === numPages}
-                  className="p-1 hover:bg-white dark:hover:bg-slate-700 rounded-lg text-slate-700 dark:text-slate-200 disabled:opacity-40 transition-all"
-                  title="Siguiente Página"
+                  onClick={() => setShowSignaturePad(true)}
+                  disabled={activePageDeleted}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
+                  title="Dibujar e Insertar Firma"
                 >
-                  <ChevronRight className="h-4 w-4" />
+                  <PenTool className="h-4 w-4" />
+                  <span>Firmar</span>
                 </button>
+
+                <button
+                  onClick={() => imageInputRef.current?.click()}
+                  disabled={activePageDeleted}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
+                  title="Subir Imagen Local"
+                >
+                  <FileImage className="h-4 w-4" />
+                  <span>Imagen</span>
+                </button>
+
+                <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1" />
+
+                <button
+                  onClick={() => setIsEditTextMode(!isEditTextMode)}
+                  disabled={activePageDeleted || originalTextItems.length === 0}
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-40 ${
+                    isEditTextMode 
+                      ? 'bg-emerald-500 hover:bg-emerald-600 text-white shadow-sm' 
+                      : 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400'
+                  }`}
+                  title="Habilitar/Deshabilitar capa para editar el texto original del documento"
+                >
+                  <Edit3 className="h-4 w-4" />
+                  <span>Modificar Original</span>
+                </button>
+
+                {/* Botón Deshacer */}
+                <button
+                  onClick={handleUndo}
+                  disabled={history.length === 0}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-semibold transition-all disabled:opacity-40 border border-slate-200 dark:border-slate-800 shadow-sm"
+                  title="Deshacer última acción"
+                >
+                  <Undo className="h-4 w-4" />
+                  <span>Deshacer</span>
+                </button>
+
+                {/* Botón Rehacer */}
+                <button
+                  onClick={handleRedo}
+                  disabled={redoHistory.length === 0}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-semibold transition-all disabled:opacity-40 border border-slate-200 dark:border-slate-800 shadow-sm"
+                  title="Rehacer acción deshecha"
+                >
+                  <Redo className="h-4 w-4" />
+                  <span>Rehacer</span>
+                </button>
+
+                <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1" />
+
+                {/* Navegación de Páginas */}
+                <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-750">
+                  <button
+                    onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+                    disabled={currentPage === 1}
+                    className="p-1 hover:bg-white dark:hover:bg-slate-700 rounded-lg text-slate-700 dark:text-slate-200 disabled:opacity-40 transition-all"
+                    title="Página Anterior"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </button>
+                  
+                  <select
+                    value={currentPage}
+                    onChange={(e) => setCurrentPage(Number(e.target.value))}
+                    className="bg-transparent text-xs font-bold text-slate-700 dark:text-slate-250 outline-none cursor-pointer px-1.5 py-0.5"
+                  >
+                    {Array.from({ length: numPages }).map((_, index) => {
+                      const pageNum = index + 1;
+                      const isDel = deletedPages.has(pageNum);
+                      const rot = rotations[pageNum];
+                      let label = `Pág. ${pageNum} / ${numPages}`;
+                      if (isDel) label += ' (Eliminada)';
+                      if (rot) label += ` (${rot}°)`;
+                      return (
+                        <option key={pageNum} value={pageNum} className="dark:bg-slate-900 text-slate-900 dark:text-slate-100">
+                          {label}
+                        </option>
+                      );
+                    })}
+                  </select>
+
+                  <button
+                    onClick={() => setCurrentPage(Math.min(numPages, currentPage + 1))}
+                    disabled={currentPage === numPages}
+                    className="p-1 hover:bg-white dark:hover:bg-slate-700 rounded-lg text-slate-700 dark:text-slate-200 disabled:opacity-40 transition-all"
+                    title="Siguiente Página"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
             </div>
 
-            {/* Ajustes de Elementos Seleccionados en la Barra Superior */}
-            {selectedElement && selectedElement.type === 'text' && editingTextElementId !== selectedElement.id && (
-              <div className="flex flex-wrap items-center gap-3 bg-slate-50 dark:bg-slate-950 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-850">
-                <span className="text-xs text-slate-400 font-bold select-none">Texto:</span>
-                <input
-                  type="text"
-                  value={selectedElement.text}
-                  onChange={(e) => updateSelectedText(e.target.value)}
-                  className="bg-white dark:bg-slate-900 text-xs px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 w-44 outline-none text-slate-850 dark:text-slate-200 font-medium"
-                />
-                
-                {!selectedElement.originalTextId && (
-                  <>
+            {/* Fila 2: Ajustes de Elementos Seleccionados (Condicional) */}
+            {selectedElement && editingTextElementId !== selectedElement.id && (
+              <div className="flex flex-wrap items-center gap-3">
+                {selectedElement.type === 'text' && (
+                  <div className="flex flex-wrap items-center gap-3 bg-slate-50 dark:bg-slate-950 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-850">
+                    <span className="text-xs text-slate-400 font-bold select-none">Texto:</span>
+                    <input
+                      type="text"
+                      value={selectedElement.text}
+                      onChange={(e) => updateSelectedText(e.target.value)}
+                      className="bg-white dark:bg-slate-900 text-xs px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 w-44 outline-none text-slate-850 dark:text-slate-200 font-medium"
+                    />
+                    
+                    {!selectedElement.originalTextId && (
+                      <>
+                        <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
+
+                        <span className="text-[10px] text-slate-400 font-semibold select-none">Tamaño:</span>
+                        <select
+                          value={selectedElement.fontSize}
+                          onChange={(e) => updateSelectedFontSize(Number(e.target.value))}
+                          className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
+                        >
+                          {Array.from(new Set([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 40, 48, 56, 72, Math.round(selectedElement.fontSize)]))
+                            .sort((a, b) => a - b)
+                            .map((s) => (
+                              <option key={s} value={s}>{s}px</option>
+                            ))
+                          }
+                        </select>
+
+                        <button
+                          onClick={toggleSelectedBold}
+                          className={`w-7 h-7 flex items-center justify-center rounded-lg font-bold text-xs ${
+                            selectedElement.fontWeight === 'bold'
+                              ? 'bg-emerald-500 text-white shadow-sm'
+                              : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                          }`}
+                          title="Negrita"
+                        >
+                          N
+                        </button>
+
+                        <button
+                          onClick={toggleSelectedItalic}
+                          className={`w-7 h-7 flex items-center justify-center rounded-lg italic text-xs ${
+                            selectedElement.fontStyle === 'italic'
+                              ? 'bg-emerald-500 text-white shadow-sm'
+                              : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                          }`}
+                          title="Cursiva"
+                        >
+                          K
+                        </button>
+
+                        <select
+                          value={selectedElement.fontFamily || 'sans-serif'}
+                          onChange={(e) => updateSelectedFontFamily(e.target.value as 'sans-serif' | 'serif' | 'monospace')}
+                          className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
+                        >
+                          <option value="sans-serif">Sans-Serif</option>
+                          <option value="serif">Serif (Times)</option>
+                          <option value="monospace">Monospace (Courier)</option>
+                        </select>
+
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] text-slate-400 font-semibold select-none">Color:</span>
+                          <input
+                            type="color"
+                            value={selectedElement.color}
+                            onChange={(e) => updateSelectedColor(e.target.value)}
+                            className="w-7 h-7 p-0.5 rounded-lg cursor-pointer border border-slate-250 dark:border-slate-800 bg-white dark:bg-slate-900"
+                            title="Color del texto"
+                          />
+                        </div>
+                      </>
+                    )}
+
                     <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
 
-                    <span className="text-[10px] text-slate-400 font-semibold select-none">Tamaño:</span>
                     <select
-                      value={selectedElement.fontSize}
-                      onChange={(e) => updateSelectedFontSize(Number(e.target.value))}
-                      className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
+                      onChange={(e) => {
+                        alignSelectedElement(e.target.value as any);
+                        e.target.value = '';
+                      }}
+                      defaultValue=""
+                      className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200 font-semibold"
                     >
-                      {Array.from(new Set([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 40, 48, 56, 72, Math.round(selectedElement.fontSize)]))
-                        .sort((a, b) => a - b)
-                        .map((s) => (
-                          <option key={s} value={s}>{s}px</option>
-                        ))
-                      }
+                      <option value="" disabled>Alinear...</option>
+                      <option value="left">A la Izquierda</option>
+                      <option value="center">Al Centro Horizontal</option>
+                      <option value="right">A la Derecha</option>
+                      <option value="top">Arriba</option>
+                      <option value="middle">Al Centro Vertical</option>
+                      <option value="bottom">Abajo</option>
                     </select>
 
+                    <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
+
                     <button
-                      onClick={toggleSelectedBold}
-                      className={`w-7 h-7 flex items-center justify-center rounded-lg font-bold text-xs ${
-                        selectedElement.fontWeight === 'bold'
-                          ? 'bg-emerald-500 text-white shadow-sm'
-                          : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
-                      }`}
-                      title="Negrita"
+                      onClick={() => handleStartTextEdit(selectedElement)}
+                      className="bg-emerald-500 hover:bg-emerald-600 text-white text-xs px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm"
+                      title="Editar texto directamente"
                     >
-                      N
+                      Editar en PDF
                     </button>
 
                     <button
-                      onClick={toggleSelectedItalic}
-                      className={`w-7 h-7 flex items-center justify-center rounded-lg italic text-xs ${
-                        selectedElement.fontStyle === 'italic'
-                          ? 'bg-emerald-500 text-white shadow-sm'
-                          : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
-                      }`}
-                      title="Cursiva"
+                      onClick={deleteSelectedElement}
+                      className="text-red-500 hover:text-red-650 hover:bg-red-500/10 p-1.5 rounded-lg transition-colors"
+                      title="Eliminar texto"
                     >
-                      K
+                      <Trash2 className="h-4 w-4" />
                     </button>
+                  </div>
+                )}
 
-                    <select
-                      value={selectedElement.fontFamily || 'sans-serif'}
-                      onChange={(e) => updateSelectedFontFamily(e.target.value as 'sans-serif' | 'serif')}
-                      className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
-                    >
-                      <option value="sans-serif">Sans-Serif</option>
-                      <option value="serif">Serif (Times)</option>
-                    </select>
-
+                {selectedElement.type === 'shape' && (
+                  <div className="flex flex-wrap items-center gap-3 bg-slate-50 dark:bg-slate-950 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-850">
+                    <span className="text-xs text-slate-400 font-bold select-none">Forma:</span>
+                    
                     <div className="flex items-center gap-1.5">
-                      <span className="text-[10px] text-slate-400 font-semibold select-none">Color:</span>
+                      <span className="text-[10px] text-slate-400 font-semibold select-none">Relleno:</span>
                       <input
                         type="color"
                         value={selectedElement.color}
                         onChange={(e) => updateSelectedColor(e.target.value)}
-                        className="w-7 h-7 p-0.5 rounded-lg cursor-pointer border border-slate-250 dark:border-slate-800 bg-white dark:bg-slate-900"
-                        title="Color del texto"
+                        className="w-7 h-7 p-0.5 rounded-lg cursor-pointer border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
                       />
                     </div>
-                  </>
+
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-slate-400 font-semibold select-none">Borde:</span>
+                      <input
+                        type="color"
+                        value={selectedElement.borderColor}
+                        onChange={(e) => updateSelectedBorderColor(e.target.value)}
+                        className="w-7 h-7 p-0.5 rounded-lg cursor-pointer border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
+                      />
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-slate-400 font-semibold select-none">Grosor:</span>
+                      <select
+                        value={selectedElement.borderWidth}
+                        onChange={(e) => updateSelectedBorderWidth(Number(e.target.value))}
+                        className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
+                      >
+                        {[0, 1, 2, 3, 4, 6, 8, 12].map((w) => (
+                          <option key={w} value={w}>{w === 0 ? 'Sin Borde' : `${w}px`}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-slate-400 font-semibold select-none">Opacidad:</span>
+                      <input
+                        type="range"
+                        min="0.1"
+                        max="1"
+                        step="0.05"
+                        value={selectedElement.opacity}
+                        onChange={(e) => updateSelectedOpacity(Number(e.target.value))}
+                        className="w-16 h-1 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                      />
+                      <span className="text-[10px] font-semibold w-7">{Math.round(selectedElement.opacity * 100)}%</span>
+                    </div>
+
+                    <select
+                      onChange={(e) => {
+                        alignSelectedElement(e.target.value as any);
+                        e.target.value = '';
+                      }}
+                      defaultValue=""
+                      className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200 font-semibold"
+                    >
+                      <option value="" disabled>Alinear...</option>
+                      <option value="left">A la Izquierda</option>
+                      <option value="center">Al Centro Horizontal</option>
+                      <option value="right">A la Derecha</option>
+                      <option value="top">Arriba</option>
+                      <option value="middle">Al Centro Vertical</option>
+                      <option value="bottom">Abajo</option>
+                    </select>
+
+                    <button
+                      onClick={deleteSelectedElement}
+                      className="text-red-500 hover:text-red-650 hover:bg-red-500/10 p-1.5 rounded-lg transition-colors"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
                 )}
 
-                <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
+                {selectedElement.type === 'image' && (
+                  <div className="flex flex-wrap items-center gap-3 bg-slate-50 dark:bg-slate-950 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-850">
+                    <span className="text-xs text-slate-400 font-bold select-none">Imagen:</span>
+                    
+                    <select
+                      onChange={(e) => {
+                        alignSelectedElement(e.target.value as any);
+                        e.target.value = '';
+                      }}
+                      defaultValue=""
+                      className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200 font-semibold"
+                    >
+                      <option value="" disabled>Alinear...</option>
+                      <option value="left">A la Izquierda</option>
+                      <option value="center">Al Centro Horizontal</option>
+                      <option value="right">A la Derecha</option>
+                      <option value="top">Arriba</option>
+                      <option value="middle">Al Centro Vertical</option>
+                      <option value="bottom">Abajo</option>
+                    </select>
 
-                <select
-                  onChange={(e) => {
-                    alignSelectedElement(e.target.value as any);
-                    e.target.value = '';
-                  }}
-                  defaultValue=""
-                  className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200 font-semibold"
-                >
-                  <option value="" disabled>Alinear...</option>
-                  <option value="left">A la Izquierda</option>
-                  <option value="center">Al Centro Horizontal</option>
-                  <option value="right">A la Derecha</option>
-                  <option value="top">Arriba</option>
-                  <option value="middle">Al Centro Vertical</option>
-                  <option value="bottom">Abajo</option>
-                </select>
-
-                <div className="h-4 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
-
-                <button
-                  onClick={() => handleStartTextEdit(selectedElement)}
-                  className="bg-emerald-500 hover:bg-emerald-600 text-white text-xs px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm"
-                  title="Editar texto directamente"
-                >
-                  Editar en PDF
-                </button>
-
-                <button
-                  onClick={deleteSelectedElement}
-                  className="text-red-500 hover:text-red-650 hover:bg-red-500/10 p-1.5 rounded-lg transition-colors"
-                  title="Eliminar texto"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                    <button
+                      onClick={deleteSelectedElement}
+                      className="text-red-500 hover:text-red-650 hover:bg-red-500/10 p-1.5 rounded-lg transition-colors"
+                      title="Eliminar imagen"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
-            {/* Ajustes de Formas */}
-            {selectedElement && selectedElement.type === 'shape' && (
-              <div className="flex flex-wrap items-center gap-3 bg-slate-50 dark:bg-slate-950 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-850">
-                <span className="text-xs text-slate-400 font-bold select-none">Forma:</span>
-                
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] text-slate-400 font-semibold select-none">Relleno:</span>
-                  <input
-                    type="color"
-                    value={selectedElement.color}
-                    onChange={(e) => updateSelectedColor(e.target.value)}
-                    className="w-7 h-7 p-0.5 rounded-lg cursor-pointer border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
-                  />
-                </div>
-
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] text-slate-400 font-semibold select-none">Borde:</span>
-                  <input
-                    type="color"
-                    value={selectedElement.borderColor}
-                    onChange={(e) => updateSelectedBorderColor(e.target.value)}
-                    className="w-7 h-7 p-0.5 rounded-lg cursor-pointer border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
-                  />
-                </div>
-
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] text-slate-400 font-semibold select-none">Grosor:</span>
-                  <select
-                    value={selectedElement.borderWidth}
-                    onChange={(e) => updateSelectedBorderWidth(Number(e.target.value))}
-                    className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
-                  >
-                    {[0, 1, 2, 3, 4, 6, 8, 12].map((w) => (
-                      <option key={w} value={w}>{w === 0 ? 'Sin Borde' : `${w}px`}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] text-slate-400 font-semibold select-none">Opacidad:</span>
-                  <input
-                    type="range"
-                    min="0.1"
-                    max="1"
-                    step="0.05"
-                    value={selectedElement.opacity}
-                    onChange={(e) => updateSelectedOpacity(Number(e.target.value))}
-                    className="w-16 h-1 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
-                  />
-                  <span className="text-[10px] font-semibold w-7">{Math.round(selectedElement.opacity * 100)}%</span>
-                </div>
-
-                <select
-                  onChange={(e) => {
-                    alignSelectedElement(e.target.value as any);
-                    e.target.value = '';
-                  }}
-                  defaultValue=""
-                  className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200 font-semibold"
-                >
-                  <option value="" disabled>Alinear...</option>
-                  <option value="left">A la Izquierda</option>
-                  <option value="center">Al Centro Horizontal</option>
-                  <option value="right">A la Derecha</option>
-                  <option value="top">Arriba</option>
-                  <option value="middle">Al Centro Vertical</option>
-                  <option value="bottom">Abajo</option>
-                </select>
-
+            {/* Fila 3: Zoom y Acciones del PDF */}
+            <div className="flex flex-wrap items-center justify-between gap-4 pt-3 border-t border-slate-100 dark:border-slate-800/80 w-full">
+              {/* Zoom */}
+              <div className="flex items-center gap-2">
                 <button
-                  onClick={deleteSelectedElement}
-                  className="text-red-500 hover:text-red-600 hover:bg-red-500/10 p-1.5 rounded-lg transition-colors"
+                  onClick={() => setZoom(Math.max(0.2, Number((zoom - 0.2).toFixed(1))))}
+                  className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-600 dark:text-slate-350 transition-colors border border-slate-200 dark:border-slate-800 shadow-sm bg-white dark:bg-slate-900"
+                  title="Alejar Zoom"
                 >
-                  <Trash2 className="h-4 w-4" />
+                  <ZoomOut className="h-4 w-4" />
+                </button>
+                <span className="text-xs font-semibold text-slate-500 select-none w-14 text-center">
+                  {Math.round(zoom * 100)}%
+                </span>
+                <button
+                  onClick={() => setZoom(Math.min(10.0, Number((zoom + 0.2).toFixed(1))))}
+                  className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-600 dark:text-slate-350 transition-colors border border-slate-200 dark:border-slate-800 shadow-sm bg-white dark:bg-slate-900"
+                  title="Acercar Zoom (Hasta 1000%)"
+                >
+                  <ZoomIn className="h-4 w-4" />
                 </button>
               </div>
-            )}
 
-            {/* Ajustes de Imágenes */}
-            {selectedElement && selectedElement.type === 'image' && (
-              <div className="flex flex-wrap items-center gap-3 bg-slate-50 dark:bg-slate-950 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-850">
-                <span className="text-xs text-slate-400 font-bold select-none">Imagen:</span>
-                
-                <select
-                  onChange={(e) => {
-                    alignSelectedElement(e.target.value as any);
-                    e.target.value = '';
-                  }}
-                  defaultValue=""
-                  className="bg-white dark:bg-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200 font-semibold"
-                >
-                  <option value="" disabled>Alinear...</option>
-                  <option value="left">A la Izquierda</option>
-                  <option value="center">Al Centro Horizontal</option>
-                  <option value="right">A la Derecha</option>
-                  <option value="top">Arriba</option>
-                  <option value="middle">Al Centro Vertical</option>
-                  <option value="bottom">Abajo</option>
-                </select>
-
+              {/* Acciones principales de Salida y Descarga */}
+              <div className="flex items-center gap-2.5">
                 <button
-                  onClick={deleteSelectedElement}
-                  className="text-red-500 hover:text-red-605 hover:bg-red-500/10 p-1.5 rounded-lg transition-colors"
-                  title="Eliminar imagen"
+                  onClick={() => {
+                    if (confirm('¿Estás seguro de que deseas salir y borrar los archivos? Esta acción es irreversible.')) {
+                      resetState();
+                    }
+                  }}
+                  className="flex items-center gap-1.5 text-xs text-red-500 hover:bg-red-500/10 px-4 py-2.5 rounded-xl font-bold transition-all"
                 >
                   <Trash2 className="h-4 w-4" />
+                  <span>Borrar todo y Salir de forma segura</span>
+                </button>
+
+                <button
+                  onClick={compileAndDownload}
+                  className="flex items-center gap-2 px-5 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-bold transition-all shadow-md hover:shadow-emerald-500/20"
+                >
+                  <Download className="h-4 w-4" />
+                  <span>Descargar PDF Editado</span>
                 </button>
               </div>
-            )}
-
-            {/* Zoom */}
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setZoom(Math.max(0.2, Number((zoom - 0.2).toFixed(1))))}
-                className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-600 dark:text-slate-350 transition-colors border border-slate-200 dark:border-slate-800 shadow-sm bg-white dark:bg-slate-900"
-                title="Alejar Zoom"
-              >
-                <ZoomOut className="h-4 w-4" />
-              </button>
-              <span className="text-xs font-semibold text-slate-500 select-none w-14 text-center">
-                {Math.round(zoom * 100)}%
-              </span>
-              <button
-                onClick={() => setZoom(Math.min(10.0, Number((zoom + 0.2).toFixed(1))))}
-                className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-600 dark:text-slate-350 transition-colors border border-slate-200 dark:border-slate-800 shadow-sm bg-white dark:bg-slate-900"
-                title="Acercar Zoom (Hasta 1000%)"
-              >
-                <ZoomIn className="h-4 w-4" />
-              </button>
             </div>
           </div>
 
@@ -1887,19 +1997,20 @@ export default function Editor() {
                                     if (e.key === 'Enter') handleConfirmTextEdit(el.id);
                                     if (e.key === 'Escape') handleCancelTextEdit();
                                   }}
-                                  className="absolute pointer-events-auto px-2 py-1 rounded outline outline-2 outline-emerald-500 bg-transparent z-45 font-sans border-0 m-0 focus:outline-emerald-500 focus:ring-0"
+                                  className="absolute pointer-events-auto rounded outline outline-2 outline-emerald-500 bg-transparent z-45 font-sans border-0 m-0 focus:outline-emerald-500 focus:ring-0"
                                   style={{
                                     left: `${el.x * 100}%`,
                                     top: `${el.y * 100}%`,
                                     fontSize: `${el.fontSize * (zoom / 2)}px`,
                                     color: el.color,
-                                    fontFamily: el.fontFamily === 'serif' ? 'Georgia, "Times New Roman", serif' : 'Helvetica, Arial, sans-serif',
-                                    fontWeight: el.fontWeight || 'normal',
+                                    fontFamily: el.fontFamily === 'serif' ? 'Georgia, "Times New Roman", serif' : el.fontFamily === 'monospace' ? 'Courier, "Courier New", monospace' : 'Helvetica, Arial, sans-serif',
+                                    fontWeight: mapFontWeightToCss(el.fontWeight),
                                     fontStyle: el.fontStyle || 'normal',
-                                    width: `${Math.max(120, tempText.length * el.fontSize * (zoom / 2) * 0.56 + 24)}px`,
+                                    width: `${Math.max(120, tempText.length * el.fontSize * (zoom / 2) * 0.56 + 10)}px`,
                                     willChange: 'left, top',
-                                    lineHeight: '1.2',
-                                    padding: '4px 8px',
+                                    lineHeight: '1.1',
+                                    padding: '0px',
+                                    outlineOffset: '3px',
                                     border: 'none',
                                   }}
                                 />
@@ -1957,11 +2068,12 @@ export default function Editor() {
 
                                       <select
                                         value={el.fontFamily || 'sans-serif'}
-                                        onChange={(e) => updateSelectedFontFamily(e.target.value as 'sans-serif' | 'serif')}
-                                        className="bg-slate-50 dark:bg-slate-950 text-xs px-2 py-1 rounded border border-slate-200 dark:border-slate-800 outline-none text-slate-850 dark:text-slate-200"
+                                        onChange={(e) => updateSelectedFontFamily(e.target.value as 'sans-serif' | 'serif' | 'monospace')}
+                                        className="bg-slate-50 dark:bg-slate-955 text-xs px-2 py-1 rounded border border-slate-200 dark:border-slate-800 outline-none text-slate-855 dark:text-slate-200"
                                       >
                                         <option value="sans-serif">Sans-Serif</option>
                                         <option value="serif">Serif (Times)</option>
+                                        <option value="monospace">Monospace (Courier)</option>
                                       </select>
 
                                       {/* Selector de Color directo en el popup */}
@@ -2013,7 +2125,7 @@ export default function Editor() {
                                 e.stopPropagation();
                                 handleStartTextEdit(el);
                               }}
-                              className={`absolute cursor-move select-none pointer-events-auto px-2 py-1 rounded transition-[outline,background-color] group ${
+                              className={`absolute cursor-move select-none pointer-events-auto rounded transition-[outline,background-color] group ${
                                 isSel 
                                   ? 'outline outline-2 outline-emerald-500 bg-transparent z-30 font-sans' 
                                   : 'hover:bg-slate-500/10 hover:outline hover:outline-1 hover:outline-slate-400'
@@ -2023,15 +2135,16 @@ export default function Editor() {
                                 top: `${el.y * 100}%`,
                                 fontSize: `${el.fontSize * (zoom / 2)}px`,
                                 color: el.color,
-                                fontFamily: el.fontFamily === 'serif' ? 'Georgia, "Times New Roman", serif' : 'Helvetica, Arial, sans-serif',
-                                fontWeight: el.fontWeight || 'normal',
+                                fontFamily: el.fontFamily === 'serif' ? 'Georgia, "Times New Roman", serif' : el.fontFamily === 'monospace' ? 'Courier, "Courier New", monospace' : 'Helvetica, Arial, sans-serif',
+                                fontWeight: mapFontWeightToCss(el.fontWeight),
                                 fontStyle: el.fontStyle || 'normal',
                                 transform: 'translate(0, 0)',
                                 whiteSpace: 'nowrap',
                                 willChange: 'left, top',
                                 touchAction: 'none',
-                                lineHeight: '1.2',
-                                padding: '4px 8px',
+                                lineHeight: '1.1',
+                                padding: '0px',
+                                outlineOffset: '3px',
                                 border: 'none',
                               }}
                               title="Doble clic para editar. Arrastra para mover."
@@ -2133,28 +2246,7 @@ export default function Editor() {
 
           </div>
 
-          {/* BOTONES INFERIORES */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row justify-between items-center gap-4 mt-4 transition-colors shadow-sm">
-            <button
-              onClick={() => {
-                if (confirm('¿Estás seguro de que deseas salir y borrar los archivos? Esta acción es irreversible.')) {
-                  resetState();
-                }
-              }}
-              className="flex items-center gap-1.5 text-xs text-red-500 hover:bg-red-500/10 px-4 py-2.5 rounded-xl font-bold transition-all w-full sm:w-auto justify-center"
-            >
-              <Trash2 className="h-4 w-4" />
-              Borrar todo y Salir de forma segura
-            </button>
 
-            <button
-              onClick={compileAndDownload}
-              className="flex items-center gap-2 px-6 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-sm font-bold transition-all shadow-md hover:shadow-emerald-500/20 w-full sm:w-auto justify-center"
-            >
-              <Download className="h-4 w-4" />
-              Descargar PDF Editado
-            </button>
-          </div>
 
         </div>
       )}
